@@ -14,6 +14,9 @@ __pycache__/
 *.h5
 *.hdf5
 
+*.mat
+*.json
+
 # Carpetas que no queremos subir
 TEST/
 TRAIN/
@@ -30,7 +33,7 @@ CHECKPOINTS/
 logs/
 
 # Bases pesadas del deformable mirror
-MODAL_BASIS/DEFORMABLE_MIRROR_BASIS/
+MODAL_BASIS/
 
 # Videos / GIF
 *.gif
