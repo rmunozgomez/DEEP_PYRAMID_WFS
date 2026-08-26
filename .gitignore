@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Modelos / checkpoints
+*.pth
+*.pt
+*.ckpt
+
+# NumPy / datos pesados
+*.npy
+*.npz
+*.h5
+*.hdf5
+
+# Carpetas que no queremos subir
+TEST/
+TRAIN/
+test/
+train/
+
+# Resultados y salidas
+results/
+RESULTS/
+outputs/
+OUTPUTS/
+checkpoints/
+CHECKPOINTS/
+logs/
+
+# Bases pesadas del deformable mirror
+MODAL_BASIS/DEFORMABLE_MIRROR_BASIS/
+
+# Videos / GIF
+*.gif
+*.mp4
+*.avi
+
+# Sistema / editor
+.DS_Store
+Thumbs.db
+.vscode/
