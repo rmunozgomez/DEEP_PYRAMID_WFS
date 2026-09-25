@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import List, Literal, Optional, Tuple, Union
+import math
 
 
 WFSReturnType = Literal["pupils", "full_frame"]
@@ -31,10 +32,88 @@ class SourceCfg:
 class TelescopeCfg:
     diameter: float = 3.0
     resolution: int = 128
+
     spiders: int = 0
-    spiders_px: int = 0
-    central_obstruction_px: int = 0
+    spiders_px: float = 0.0
+    spider_angles_deg: Optional[Tuple[float, ...]] = None
+
+    central_obstruction_px: float = 0.0
+    central_obstruction_offset_px: Tuple[float, float] = (
+        0.0,
+        0.0,
+    )
+
     samp: int = 2
+
+    def __post_init__(self) -> None:
+
+        if self.diameter <= 0:
+            raise ValueError(
+                "diameter must be positive."
+            )
+
+        if self.resolution <= 0:
+            raise ValueError(
+                "resolution must be positive."
+            )
+
+        if self.spiders < 0:
+            raise ValueError(
+                "spiders must be >= 0."
+            )
+
+        if self.spiders_px < 0:
+            raise ValueError(
+                "spiders_px must be >= 0."
+            )
+
+        if self.central_obstruction_px < 0:
+            raise ValueError(
+                "central_obstruction_px must be >= 0."
+            )
+
+        if self.central_obstruction_px >= self.resolution:
+            raise ValueError(
+                "central_obstruction_px must be smaller "
+                "than telescope resolution."
+            )
+
+        if self.samp <= 0:
+            raise ValueError(
+                "samp must be positive."
+            )
+
+        if len(self.central_obstruction_offset_px) != 2:
+            raise ValueError(
+                "central_obstruction_offset_px must be (dx, dy)."
+            )
+
+        if not all(
+            math.isfinite(float(value))
+            for value
+            in self.central_obstruction_offset_px
+        ):
+            raise ValueError(
+                "central_obstruction_offset_px must contain "
+                "finite values."
+            )
+
+        if self.spider_angles_deg is not None:
+
+            if len(self.spider_angles_deg) != self.spiders:
+                raise ValueError(
+                    "When spider_angles_deg is supplied, its "
+                    "length must equal spiders."
+                )
+
+            if not all(
+                math.isfinite(float(angle))
+                for angle
+                in self.spider_angles_deg
+            ):
+                raise ValueError(
+                    "spider_angles_deg must contain finite values."
+                )
 
 
 @dataclass(frozen=True)

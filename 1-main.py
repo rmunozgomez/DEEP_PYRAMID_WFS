@@ -920,6 +920,63 @@ def _run_open_closed_loop_batch(
         "last_debug": last_debug,
     }
 
+def _build_telescope_pupil(
+    *,
+    telescope_cfg,
+    device: str,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+
+    resolution = int(
+        telescope_cfg.resolution
+    )
+
+    # Centro geométrico de la pupila
+    cx = (
+        resolution - 1
+    ) / 2.0
+
+    cy = (
+        resolution - 1
+    ) / 2.0
+
+    # Offset de la obstrucción
+    dx, dy = (
+        telescope_cfg.central_obstruction_offset_px
+    )
+
+    obstruction_center = (
+        cx + float(dx),
+        cy + float(dy),
+    )
+
+    pupil = circular_pupil_telescope(
+        n=resolution,
+
+        spiders=telescope_cfg.spiders,
+
+        spiders_px=(
+            telescope_cfg.spiders_px
+        ),
+
+        spider_angles_deg=(
+            telescope_cfg.spider_angles_deg
+        ),
+
+        central_obstruction_diam_px=(
+            telescope_cfg.central_obstruction_px
+        ),
+
+        central_obstruction_center_px=(
+            obstruction_center
+        ),
+
+        device=device,
+        dtype=dtype,
+        soft_edge_px=0.0,
+    )
+
+    return pupil
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -944,7 +1001,11 @@ def main() -> None:
     model_cfg = cfg.model
     stages_cfg = cfg.stages
 
-    
+    phase_rad_to_wfe_nm = (
+        source_cfg.wavelength
+        * 1e9
+        / (2.0 * math.pi)
+    )
 
     device = arguments.device
     experiment_name = arguments.expName
@@ -952,16 +1013,10 @@ def main() -> None:
 
     precision = get_precision(stages_cfg[0].train.precision)
 
-    telescope_pupil = circular_pupil_telescope(
-        n=telescope_cfg.resolution,
-        spiders=telescope_cfg.spiders,
-        spiders_px=telescope_cfg.spiders_px,
-        central_obstruction_diam_px=(
-            telescope_cfg.central_obstruction_px
-        ),
+    telescope_pupil = _build_telescope_pupil(
+        telescope_cfg=telescope_cfg,
         device=device,
         dtype=precision.real,
-        soft_edge_px=0,
     )
 
     # ============================================================
@@ -1019,19 +1074,6 @@ def main() -> None:
         dtype=precision.real,
     )
 
-    # The propagation pupil remains the configured telescope pupil.
-    telescope_pupil = circular_pupil_telescope(
-        n=telescope_cfg.resolution,
-        spiders=telescope_cfg.spiders,
-        spiders_px=telescope_cfg.spiders_px,
-        central_obstruction_diam_px=(
-            telescope_cfg.central_obstruction_px
-        ),
-        device=device,
-        dtype=precision.real,
-        soft_edge_px=0,
-    )
-
     n_output_modes = int(zDecomposeMat.shape[0])
     for stage in stages_cfg:
         stage.atmosphere.n_modes = n_output_modes
@@ -1054,6 +1096,7 @@ def main() -> None:
         offset=wfs_cfg.offset,
         precision=precision,
         device=device,
+        telescope_pupil=telescope_pupil
     )
     wfs_output_shape = WFS.piston_wfs.shape
 
@@ -1136,6 +1179,37 @@ def main() -> None:
         parents=True,
         exist_ok=True,
     )
+
+    fig, ax = plt.subplots(
+        1,
+        1,
+        figsize=(6, 6),
+    )
+
+    ax.imshow(
+        telescope_pupil[
+            0,
+            0,
+        ].detach().cpu(),
+        origin="upper",
+    )
+
+    ax.set_title(
+        "TELESCOPE PUPIL"
+    )
+
+    ax.axis("off")
+
+    fig.tight_layout()
+
+    fig.savefig(
+        wfs_figures_path
+        / "telescope_pupil.png",
+        dpi=200,
+        bbox_inches="tight",
+    )
+
+    plt.close(fig)
 
     save_run_info(
         cfg=cfg,
@@ -1586,12 +1660,39 @@ def main() -> None:
                 dr0_batch = (
                     telescope_cfg.diameter / atmosphere.r0_batch
                 )
+                std0 = (
+                    running_open_std
+                    / completed
+                )
+
+                std_last = (
+                    running_last_std
+                    / completed
+                )
+
                 progress.set_postfix(
                     loss=running_loss / completed,
-                    std0=running_open_std / completed,
-                    std_last=running_last_std / completed,
-                    dr0_min=float(dr0_batch.min().item()),
-                    dr0_max=float(dr0_batch.max().item()),
+
+                    std0=std0,
+                    std_last=std_last,
+
+                    wfe0_nm=(
+                        std0
+                        * phase_rad_to_wfe_nm
+                    ),
+
+                    wfe_last_nm=(
+                        std_last
+                        * phase_rad_to_wfe_nm
+                    ),
+
+                    dr0_min=float(
+                        dr0_batch.min().item()
+                    ),
+
+                    dr0_max=float(
+                        dr0_batch.max().item()
+                    ),
                 )
 
             train_loss_epoch = (
@@ -1702,12 +1803,39 @@ def main() -> None:
                     dr0_batch = (
                         telescope_cfg.diameter / atmosphere.r0_batch
                     )
+                    std0 = (
+                        running_open_std
+                        / completed
+                    )
+
+                    std_last = (
+                        running_last_std
+                        / completed
+                    )
+
                     progress.set_postfix(
                         loss=running_loss / completed,
-                        std0=running_open_std / completed,
-                        std_last=running_last_std / completed,
-                        dr0_min=float(dr0_batch.min().item()),
-                        dr0_max=float(dr0_batch.max().item()),
+
+                        std0=std0,
+                        std_last=std_last,
+
+                        wfe0_nm=(
+                            std0
+                            * phase_rad_to_wfe_nm
+                        ),
+
+                        wfe_last_nm=(
+                            std_last
+                            * phase_rad_to_wfe_nm
+                        ),
+
+                        dr0_min=float(
+                            dr0_batch.min().item()
+                        ),
+
+                        dr0_max=float(
+                            dr0_batch.max().item()
+                        ),
                     )
 
                     last_val_pack = {

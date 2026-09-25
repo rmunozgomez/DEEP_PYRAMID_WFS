@@ -124,6 +124,7 @@ class Pyramid:
             pixel_pitch = 3.74e-6,
             precision = None,
             device = "cpu",
+            telescope_pupil = None
             ):
         
         self.precision = precision
@@ -148,8 +149,30 @@ class Pyramid:
         self.alpha = alpha
         self.wavelength = wavelength
         self.pixel_pitch = pixel_pitch
-        
-        self.telescope_pupil = circular_pupil(telescope_resolution,device=self.device,dtype=precision.real)
+        if telescope_pupil is None:
+            self.telescope_pupil = circular_pupil(
+                telescope_resolution,
+                device=self.device,
+                dtype=precision.real,
+            )
+        else:
+            expected_shape = (
+                1,
+                1,
+                telescope_resolution,
+                telescope_resolution,
+            )
+            if tuple(telescope_pupil.shape) != expected_shape:
+                raise ValueError(
+                    "telescope_pupil debe tener shape "
+                    f"{expected_shape}, recibido "
+                    f"{tuple(telescope_pupil.shape)}"
+                )
+            self.telescope_pupil = telescope_pupil.to(
+                device=self.device,
+                dtype=precision.real,
+            )
+
         self.pyramid_mask = fourier_geometry(alpha=self.alpha, 
                                              nhead=self.nHeads, 
                                              nPx = self.filter_resolution,
@@ -174,8 +197,12 @@ class Pyramid:
             device=self.device,
             return_crop_sizes=True,
         )
-        self.piston_wfs = self.propagate(pupil=self.telescope_pupil, phi = self.telescope_pupil)
-
+        self.piston_wfs = self.propagate(
+            pupil=self.telescope_pupil,
+            phi=torch.zeros_like(
+                self.telescope_pupil
+            ),
+        )
     def propagate(
         self,
         phi,

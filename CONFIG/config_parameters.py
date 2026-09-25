@@ -16,13 +16,36 @@ SOURCE_PIXEL_PITCH = 3.74e-6
 # ============================================================
 # TELESCOPE
 # ============================================================
+
 TELESCOPE_DIAMETER = 0.6
 TELESCOPE_RESOLUTION = 128
+# Spiders
 TELESCOPE_SPIDERS = 0
-TELESCOPE_SPIDERS_PX = 0
-TELESCOPE_CENTRAL_OBSTRUCTION_PX = 0
+TELESCOPE_SPIDERS_PX = 0.0
+# Cada ángulo representa UN brazo.
+#
+# Convención:
+#   0 deg   -> derecha
+#   90 deg  -> abajo
+#   180 deg -> izquierda
+#   270 deg -> arriba
+#
+# None -> comportamiento automático anterior.
+#
+# Ejemplo para cuatro brazos:
+# [45.0, 135.0, 225.0, 315.0]
+TELESCOPE_SPIDER_ANGLES_DEG = None
+# Obstrucción central
+TELESCOPE_CENTRAL_OBSTRUCTION_PX = 0.0
+# Desplazamiento respecto del centro geométrico [px]
+#
+# +x -> derecha
+# +y -> abajo
+TELESCOPE_CENTRAL_OBSTRUCTION_OFFSET_PX = (
+    0.0,
+    0.0,
+)
 TELESCOPE_SAMP = 2
-
 
 # ============================================================
 # PYRAMID WFS
@@ -39,7 +62,7 @@ WFS_OFFSET = 10
 # ============================================================
 # NEURAL NETWORK
 # ============================================================
-MODEL = "TinyResNetWFS" # "ConvNeXtTiny", "GcVit", "TinyResNetWFS"
+MODEL = "ConvNeXtTiny" # "ConvNeXtTiny", "GcVit", "TinyResNetWFS"
 WTS = None
 NN_RESOLUTION = 36
 
@@ -48,7 +71,7 @@ NN_RESOLUTION = 36
 # ATMOSPHERE — PER STAGE
 # ============================================================
 # Total online samples generated per epoch: train + validation.
-ATMOSPHERE_SAMPLES = [100]
+ATMOSPHERE_SAMPLES = [100000]
 
 # D/r0 is sampled uniformly inside this interval, then r0 = D / (D/r0).
 ATMOSPHERE_DR0_RANGE = [[5.0, 40.0]]

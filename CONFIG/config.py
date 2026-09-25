@@ -317,14 +317,45 @@ def get_config() -> ExperimentCfg:
             pixel_pitch=float(P.SOURCE_PIXEL_PITCH),
         ),
         telescope=TelescopeCfg(
-            diameter=float(P.TELESCOPE_DIAMETER),
-            resolution=int(P.TELESCOPE_RESOLUTION),
-            spiders=int(P.TELESCOPE_SPIDERS),
-            spiders_px=int(P.TELESCOPE_SPIDERS_PX),
-            central_obstruction_px=int(
+            diameter=float(
+                P.TELESCOPE_DIAMETER
+            ),
+
+            resolution=int(
+                P.TELESCOPE_RESOLUTION
+            ),
+
+            spiders=int(
+                P.TELESCOPE_SPIDERS
+            ),
+
+            spiders_px=float(
+                P.TELESCOPE_SPIDERS_PX
+            ),
+
+            spider_angles_deg=(
+                None
+                if P.TELESCOPE_SPIDER_ANGLES_DEG is None
+                else tuple(
+                    float(angle)
+                    for angle
+                    in P.TELESCOPE_SPIDER_ANGLES_DEG
+                )
+            ),
+
+            central_obstruction_px=float(
                 P.TELESCOPE_CENTRAL_OBSTRUCTION_PX
             ),
-            samp=int(P.TELESCOPE_SAMP),
+
+            central_obstruction_offset_px=tuple(
+                float(value)
+                for value
+                in P.TELESCOPE_CENTRAL_OBSTRUCTION_OFFSET_PX
+            ),
+
+            samp=int(
+                P.TELESCOPE_SAMP
+            ),
         ),
         wfs=WfsCfg(
             return_type=str(P.WFS_RETURN_TYPE),
