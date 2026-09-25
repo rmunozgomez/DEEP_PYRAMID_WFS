@@ -272,32 +272,19 @@ class Pyramid:
 
             if return_boxes:
 
-                I_crop, boxes = self.crop_pyr(
+                I_resized, boxes = self.crop_pyr(
                     I_full,
                     return_boxes=True,
                 )
 
             else:
 
-                I_crop = self.crop_pyr(
+                I_resized = self.crop_pyr(
                     I_full,
                     return_boxes=False,
                 )
 
                 boxes = None
-
-            # --------------------------------------------------------
-            # Resize a resolución de la NN
-            # --------------------------------------------------------
-
-            I_resized = self.resize_tensor(
-                I_crop,
-                M=self.output_resolution,
-            )
-
-            # --------------------------------------------------------
-            # Returns
-            # --------------------------------------------------------
 
             if return_both and return_boxes:
                 return (
@@ -334,36 +321,6 @@ class Pyramid:
         intensity: torch.Tensor,
         return_boxes: bool = False,
     ):
-        """
-        Crop de las pupilas del PWFS.
-
-        Parameters
-        ----------
-        intensity:
-            [B, 1, H, W]
-
-        return_boxes:
-            Si True, además retorna:
-
-            boxes = [
-                (x0, y0, x1, y1),
-                ...
-            ]
-
-            en coordenadas del frame ORIGINAL, antes del padding.
-
-        Returns
-        -------
-        crops:
-            [B, N, crop_size, crop_size]
-
-        boxes:
-            opcional.
-        """
-
-        # ============================================================
-        # Caso general
-        # ============================================================
 
         B, C, H, W = intensity.shape
         N = self.coords.shape[0]
@@ -378,145 +335,192 @@ class Pyramid:
                 "self.crop_sizes debe tener el mismo largo que self.coords"
             )
 
-        # ============================================================
-        # Tamaño REAL utilizado en esta propagación
-        # ============================================================
-
-        max_size = int(
+        base_size = int(
             np.max(crop_sizes)
         )
 
-        if self.crop_size_noise > 0:
+        if base_size % 2 != 0:
+            base_size += 1
 
-            size_jitter = int(
-                torch.randint(
-                    -self.crop_size_noise,
-                    self.crop_size_noise + 1,
-                    (1,),
-                    device=intensity.device,
-                ).item()
-            )
-
-            max_size += size_jitter
-
-        # Forzar tamaño par
-        if max_size % 2 != 0:
-            max_size += 1
-
-        max_half = max_size // 2
-
-        # ============================================================
-        # Padding
-        # ============================================================
-
-        intensity_pad = F.pad(
-            intensity,
-            (
-                max_half,
-                max_half,
-                max_half,
-                max_half,
-            ),
-            mode="constant",
-            value=0.0,
-        )
-
-        crops = torch.zeros(
+        crops = torch.empty(
             (
                 B,
                 N,
-                max_size,
-                max_size,
+                self.output_resolution,
+                self.output_resolution,
             ),
             device=intensity.device,
             dtype=intensity.dtype,
         )
 
-        boxes = []
+        boxes = np.zeros(
+            (
+                B,
+                N,
+                4,
+            ),
+            dtype=np.int64,
+        )
 
-        # ============================================================
-        # Pupilas
-        # ============================================================
+        max_crop_size = (
+            base_size
+            + 2 * int(self.crop_size_noise)
+        )
 
-        for n in range(N):
+        max_half = max_crop_size // 2
 
-            size_n = max_size
+        pad = (
+            max_half
+            + int(self.crop_pos_noise)
+            + 1
+        )
 
-            if size_n % 2 != 0:
-                size_n += 1
+        intensity_pad = F.pad(
+            intensity,
+            (
+                pad,
+                pad,
+                pad,
+                pad,
+            ),
+            mode="constant",
+            value=0.0,
+        )
 
-            half_n = size_n // 2
+        for b in range(B):
 
-            # --------------------------------------------------------
-            # Position jitter REAL
-            # --------------------------------------------------------
+            for n in range(N):
 
-            if self.crop_pos_noise > 0:
+                # ====================================================
+                # Crop size jitter
+                # ====================================================
 
-                dx = int(
-                    torch.randint(
-                        -self.crop_pos_noise,
-                        self.crop_pos_noise + 1,
-                        (1,),
-                        device=intensity.device,
-                    ).item()
+                if self.crop_size_noise > 0:
+
+                    size_step = int(
+                        torch.randint(
+                            low=-self.crop_size_noise,
+                            high=self.crop_size_noise + 1,
+                            size=(1,),
+                            device=intensity.device,
+                        ).item()
+                    )
+
+                else:
+
+                    size_step = 0
+
+                size_n = (
+                    base_size
+                    + 2 * size_step
                 )
 
-                dy = int(
-                    torch.randint(
-                        -self.crop_pos_noise,
-                        self.crop_pos_noise + 1,
-                        (1,),
-                        device=intensity.device,
-                    ).item()
-                )
+                if size_n <= 0:
+                    raise ValueError(
+                        f"Crop size inválido: {size_n}"
+                    )
 
-            else:
+                half_n = size_n // 2
 
-                dx = 0
-                dy = 0
+                # ====================================================
+                # Position jitter
+                # ====================================================
 
-            # --------------------------------------------------------
-            # Centro en coordenadas del FULL FRAME
-            # --------------------------------------------------------
+                if self.crop_pos_noise > 0:
 
-            x = int(self.coords[n, 0]) + dx
-            y = int(self.coords[n, 1]) + dy
+                    dx = int(
+                        torch.randint(
+                            low=-self.crop_pos_noise,
+                            high=self.crop_pos_noise + 1,
+                            size=(1,),
+                            device=intensity.device,
+                        ).item()
+                    )
 
-            # --------------------------------------------------------
-            # Bounding box ORIGINAL
-            # --------------------------------------------------------
+                    dy = int(
+                        torch.randint(
+                            low=-self.crop_pos_noise,
+                            high=self.crop_pos_noise + 1,
+                            size=(1,),
+                            device=intensity.device,
+                        ).item()
+                    )
 
-            x0 = x - half_n
-            x1 = x + half_n
+                else:
 
-            y0 = y - half_n
-            y1 = y + half_n
+                    dx = 0
+                    dy = 0
 
-            boxes.append(
-                (
+                # ====================================================
+                # Centro
+                # ====================================================
+
+                x = int(
+                    self.coords[n, 0]
+                ) + dx
+
+                y = int(
+                    self.coords[n, 1]
+                ) + dy
+
+                # ====================================================
+                # Bounding box
+                # ====================================================
+
+                x0 = x - half_n
+                x1 = x + half_n
+
+                y0 = y - half_n
+                y1 = y + half_n
+
+                boxes[
+                    b,
+                    n,
+                    :,
+                ] = (
                     x0,
                     y0,
                     x1,
                     y1,
                 )
-            )
 
-            # --------------------------------------------------------
-            # Pasar a coordenadas padded
-            # --------------------------------------------------------
+                # ====================================================
+                # Crop
+                # ====================================================
 
-            xp = x + max_half
-            yp = y + max_half
+                xp = x + pad
+                yp = y + pad
 
-            crop = intensity_pad[
-                :,
-                0,
-                yp - half_n:yp + half_n,
-                xp - half_n:xp + half_n,
-            ]
+                crop = intensity_pad[
+                    b:b + 1,
+                    :,
+                    yp - half_n:yp + half_n,
+                    xp - half_n:xp + half_n,
+                ]
 
-            crops[:, n, :, :] = crop
+                # ====================================================
+                # Resize individual a NN resolution
+                # ====================================================
+
+                crop_resized = F.interpolate(
+                    crop,
+                    size=(
+                        self.output_resolution,
+                        self.output_resolution,
+                    ),
+                    mode="bilinear",
+                    align_corners=False,
+                )
+
+                crops[
+                    b,
+                    n,
+                    :,
+                    :,
+                ] = crop_resized[
+                    0,
+                    0,
+                ]
 
         if return_boxes:
             return crops, boxes

@@ -1199,7 +1199,7 @@ def main() -> None:
         _plot_wfs_with_boxes(
             ax,
             flat_full,
-            flat_boxes,
+            flat_boxes[0],
             network_resolution=model_cfg.resolution,
             title=(
                 "FLAT WFS | "
@@ -1273,7 +1273,7 @@ def main() -> None:
         _plot_wfs_with_boxes(
             axes[0, 1],
             intensity_positive_full,
-            boxes_positive,
+            boxes_positive[0],
             network_resolution=model_cfg.resolution,
             title="Pyramid propagation + NN crops",
         )
@@ -1287,7 +1287,7 @@ def main() -> None:
         _plot_wfs_with_boxes(
             axes[1, 1],
             intensity_negative_full,
-            boxes_negative,
+            boxes_negative[0],
             network_resolution=model_cfg.resolution,
             title="Pyramid propagation + NN crops",
         )
@@ -1438,7 +1438,7 @@ def main() -> None:
                 _plot_wfs_with_boxes(
                     axes[2],
                     intensity_test_full,
-                    intensity_test_boxes,
+                    intensity_test_boxes[0],
                     network_resolution=model_cfg.resolution,
                     title="WFS intensity + NN crops",
                 )
@@ -1722,7 +1722,7 @@ def main() -> None:
                         "open_pred": open_pred[-1:].cpu(),
 
                         # NUEVO
-                        "open_boxes": open_boxes,
+                        "open_boxes": open_boxes[-1],
 
                         "last_phi": last_phi[-1:].cpu(),
                         "last_amplitude": last_amplitude[-1:].cpu(),
@@ -1735,7 +1735,7 @@ def main() -> None:
                         "last_pred": last_pred[-1:].cpu(),
 
                         # NUEVO
-                        "last_boxes": last_boxes,
+                        "last_boxes": last_boxes[-1],
 
                         "profile": asdict(profile),
                     }
