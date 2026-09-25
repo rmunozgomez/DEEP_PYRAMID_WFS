@@ -258,74 +258,244 @@ def _save_debug_val_open_last_plot(
     open_phi: torch.Tensor,
     open_amplitude: torch.Tensor,
     open_I: torch.Tensor,
+    open_boxes,
     open_pred: torch.Tensor,
     last_phi: torch.Tensor,
     last_amplitude: torch.Tensor,
     last_I: torch.Tensor,
+    last_boxes,
     last_pred: torch.Tensor,
+    network_resolution: int,
     stage_idx: int,
     filename: str = "val_open_last_debug.png",
 ) -> None:
-    stage_path.mkdir(parents=True, exist_ok=True)
-    figure_path = stage_path / filename
 
-    open_phi = open_phi.detach().float().cpu()
-    open_amplitude = open_amplitude.detach().float().cpu()
-    open_I = open_I.detach().float().cpu()
-    open_pred = open_pred.detach().float().cpu()
+    stage_path.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-    last_phi = last_phi.detach().float().cpu()
-    last_amplitude = last_amplitude.detach().float().cpu()
-    last_I = last_I.detach().float().cpu()
-    last_pred = last_pred.detach().float().cpu()
+    figure_path = (
+        stage_path
+        / filename
+    )
 
-    fig, axes = plt.subplots(2, 4, figsize=(19, 8), dpi=160)
+    # ============================================================
+    # CPU
+    # ============================================================
+
+    open_phi = (
+        open_phi
+        .detach()
+        .float()
+        .cpu()
+    )
+
+    open_amplitude = (
+        open_amplitude
+        .detach()
+        .float()
+        .cpu()
+    )
+
+    open_I = (
+        open_I
+        .detach()
+        .float()
+        .cpu()
+    )
+
+    open_pred = (
+        open_pred
+        .detach()
+        .float()
+        .cpu()
+    )
+
+    last_phi = (
+        last_phi
+        .detach()
+        .float()
+        .cpu()
+    )
+
+    last_amplitude = (
+        last_amplitude
+        .detach()
+        .float()
+        .cpu()
+    )
+
+    last_I = (
+        last_I
+        .detach()
+        .float()
+        .cpu()
+    )
+
+    last_pred = (
+        last_pred
+        .detach()
+        .float()
+        .cpu()
+    )
+
+    # ============================================================
+    # Figure
+    # ============================================================
+
+    fig, axes = plt.subplots(
+        2,
+        4,
+        figsize=(19, 8),
+        dpi=160,
+    )
+
     fig.suptitle(
         f"Stage {stage_idx} - online atmosphere validation"
     )
 
-    axes[0, 0].set_title("OPEN LOOP | phi target")
-    axes[0, 0].imshow(open_phi[0, 0].numpy())
+    # ============================================================
+    # OPEN LOOP
+    # ============================================================
+
+    axes[0, 0].set_title(
+        "OPEN LOOP | phi target"
+    )
+
+    axes[0, 0].imshow(
+        open_phi[0, 0].numpy()
+    )
+
     axes[0, 0].axis("off")
 
-    axes[0, 1].set_title("OPEN LOOP | atmospheric amplitude")
-    axes[0, 1].imshow(open_amplitude[0, 0].numpy())
+    # ------------------------------------------------------------
+
+    axes[0, 1].set_title(
+        "OPEN LOOP | atmospheric amplitude"
+    )
+
+    axes[0, 1].imshow(
+        open_amplitude[0, 0].numpy()
+    )
+
     axes[0, 1].axis("off")
 
-    axes[0, 2].set_title("OPEN LOOP | WFS intensity")
-    axes[0, 2].imshow(open_I[0, 0].numpy())
-    axes[0, 2].axis("off")
+    # ------------------------------------------------------------
+    # FULL WFS + BBOXES
+    # ------------------------------------------------------------
 
-    axes[0, 3].set_title("OPEN LOOP | predicted coefficients")
-    axes[0, 3].plot(open_pred[0].numpy(), label="Prediction")
-    axes[0, 3].set_xlabel("mode / actuator")
-    axes[0, 3].set_ylabel("coefficient")
-    axes[0, 3].grid(True, alpha=0.3)
+    _plot_wfs_with_boxes(
+        axes[0, 2],
+        open_I,
+        open_boxes,
+        network_resolution=network_resolution,
+        title="OPEN LOOP | WFS + NN crops",
+    )
+
+    # ------------------------------------------------------------
+
+    axes[0, 3].set_title(
+        "OPEN LOOP | predicted coefficients"
+    )
+
+    axes[0, 3].plot(
+        open_pred[0].numpy(),
+        label="Prediction",
+    )
+
+    axes[0, 3].set_xlabel(
+        "mode / actuator"
+    )
+
+    axes[0, 3].set_ylabel(
+        "coefficient"
+    )
+
+    axes[0, 3].grid(
+        True,
+        alpha=0.3,
+    )
+
     axes[0, 3].legend()
 
-    axes[1, 0].set_title("CLOSED LOOP | residual phi")
-    axes[1, 0].imshow(last_phi[0, 0].numpy())
+    # ============================================================
+    # CLOSED LOOP
+    # ============================================================
+
+    axes[1, 0].set_title(
+        "CLOSED LOOP | residual phi"
+    )
+
+    axes[1, 0].imshow(
+        last_phi[0, 0].numpy()
+    )
+
     axes[1, 0].axis("off")
 
-    axes[1, 1].set_title("CLOSED LOOP | atmospheric amplitude")
-    axes[1, 1].imshow(last_amplitude[0, 0].numpy())
+    # ------------------------------------------------------------
+
+    axes[1, 1].set_title(
+        "CLOSED LOOP | atmospheric amplitude"
+    )
+
+    axes[1, 1].imshow(
+        last_amplitude[0, 0].numpy()
+    )
+
     axes[1, 1].axis("off")
 
-    axes[1, 2].set_title("CLOSED LOOP | WFS intensity")
-    axes[1, 2].imshow(last_I[0, 0].numpy())
-    axes[1, 2].axis("off")
+    # ------------------------------------------------------------
+    # FULL WFS + BBOXES
+    # ------------------------------------------------------------
 
-    axes[1, 3].set_title("CLOSED LOOP | predicted residual")
-    axes[1, 3].plot(last_pred[0].numpy(), label="Prediction")
-    axes[1, 3].set_xlabel("mode / actuator")
-    axes[1, 3].set_ylabel("coefficient")
-    axes[1, 3].grid(True, alpha=0.3)
+    _plot_wfs_with_boxes(
+        axes[1, 2],
+        last_I,
+        last_boxes,
+        network_resolution=network_resolution,
+        title="CLOSED LOOP | WFS + NN crops",
+    )
+
+    # ------------------------------------------------------------
+
+    axes[1, 3].set_title(
+        "CLOSED LOOP | predicted residual"
+    )
+
+    axes[1, 3].plot(
+        last_pred[0].numpy(),
+        label="Prediction",
+    )
+
+    axes[1, 3].set_xlabel(
+        "mode / actuator"
+    )
+
+    axes[1, 3].set_ylabel(
+        "coefficient"
+    )
+
+    axes[1, 3].grid(
+        True,
+        alpha=0.3,
+    )
+
     axes[1, 3].legend()
 
-    fig.tight_layout()
-    fig.savefig(figure_path, dpi=200, bbox_inches="tight")
-    plt.close(fig)
+    # ============================================================
+    # Save
+    # ============================================================
 
+    fig.tight_layout()
+
+    fig.savefig(
+        figure_path,
+        dpi=200,
+        bbox_inches="tight",
+    )
+
+    plt.close(fig)
 
 def _uniform_scalar(
     generator: torch.Generator,
@@ -1704,22 +1874,41 @@ def main() -> None:
 
                 _save_debug_val_open_last_plot(
                     stage_figures_path,
+
                     open_phi=open_phi.cpu(),
+
                     open_amplitude=last_val_pack[
                         "open_amplitude"
                     ],
+
                     open_I=open_I_full.detach().cpu(),
+
+                    open_boxes=last_val_pack[
+                        "open_boxes"
+                    ],
+
                     open_pred=last_val_pack[
                         "open_pred"
                     ],
+
                     last_phi=last_phi.cpu(),
+
                     last_amplitude=last_val_pack[
                         "last_amplitude"
                     ],
+
                     last_I=last_I_full.detach().cpu(),
+
+                    last_boxes=last_val_pack[
+                        "last_boxes"
+                    ],
+
                     last_pred=last_val_pack[
                         "last_pred"
                     ],
+
+                    network_resolution=model_cfg.resolution,
+
                     stage_idx=stage_idx,
                 )
 
