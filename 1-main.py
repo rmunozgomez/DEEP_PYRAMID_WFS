@@ -1857,21 +1857,6 @@ def main() -> None:
                     no_crop=True,
                 )
 
-                if train_cfg.noise:
-                    debug_seed = (
-                        atmosphere_cfg.seed
-                        + atmosphere_cfg.validation_seed_offset
-                        + 999_999
-                    )
-                    _seed_global_torch(debug_seed, device)
-                    open_I_full = noise_pipe(
-                        open_I_full
-                    )
-                    _seed_global_torch(debug_seed + 1, device)
-                    last_I_full = noise_pipe(
-                        last_I_full
-                    )
-
                 _save_debug_val_open_last_plot(
                     stage_figures_path,
 

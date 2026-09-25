@@ -329,12 +329,6 @@ class Pyramid:
     def resize_tensor(self,x: torch.Tensor, M: int, mode: str = "bilinear") -> torch.Tensor:
         return F.interpolate(x, size=(M, M), mode=mode, align_corners=False if mode in ("bilinear", "bicubic", "trilinear", "linear") else None)
     
-    def add_jitter(self,x,y,sz, l = -1, h = 1):
-        x += (torch.randint(low=l , high= 1 + h, size=(1,)))
-        y += (torch.randint(low=l , high= 1 + h, size=(1,)))
-        #sz += (torch.randint(low=l , high= 1 + h, size=(1,)))
-        return x,y,sz
-
     def crop_pyr(
         self,
         intensity: torch.Tensor,
@@ -366,84 +360,6 @@ class Pyramid:
         boxes:
             opcional.
         """
-
-        # ============================================================
-        # Caso especial resolution == 32
-        # ============================================================
-
-        if self.telescope_resolution == 32:
-
-            B, C, H, W = intensity.shape
-            N = self.coords.shape[0]
-
-            sz_crop = 36
-
-            x_crop = [
-                23,
-                71,
-                23,
-                71,
-            ]
-
-            y_crop = [
-                23,
-                23,
-                71,
-                71,
-            ]
-
-            crops = torch.zeros(
-                (
-                    B,
-                    N,
-                    sz_crop,
-                    sz_crop,
-                ),
-                device=intensity.device,
-                dtype=intensity.dtype,
-            )
-
-            boxes = []
-
-            for face in range(N):
-
-                x = x_crop[face]
-                y = y_crop[face]
-                sz = sz_crop
-
-                x, y, sz = self.add_jitter(
-                    x,
-                    y,
-                    sz,
-                )
-
-                x = int(x)
-                y = int(y)
-
-                I_face = intensity[
-                    :,
-                    :,
-                    y:y + sz,
-                    x:x + sz,
-                ]
-
-                crops[:, face, :, :] = (
-                    I_face[:, 0, :, :]
-                )
-
-                boxes.append(
-                    (
-                        x,
-                        y,
-                        x + sz,
-                        y + sz,
-                    )
-                )
-
-            if return_boxes:
-                return crops, boxes
-
-            return crops
 
         # ============================================================
         # Caso general
