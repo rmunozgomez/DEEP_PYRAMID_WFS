@@ -20,8 +20,8 @@ SOURCE_PIXEL_PITCH = 3.74e-6
 TELESCOPE_DIAMETER = 0.6
 TELESCOPE_RESOLUTION = 128
 # Spiders
-TELESCOPE_SPIDERS = 0
-TELESCOPE_SPIDERS_PX = 0.0
+TELESCOPE_SPIDERS = 4
+TELESCOPE_SPIDERS_PX = 5.0
 # Cada ángulo representa UN brazo.
 #
 # Convención:
@@ -34,9 +34,12 @@ TELESCOPE_SPIDERS_PX = 0.0
 #
 # Ejemplo para cuatro brazos:
 # [45.0, 135.0, 225.0, 315.0]
-TELESCOPE_SPIDER_ANGLES_DEG = None
+TELESCOPE_SPIDER_ANGLES_DEG = [-60.0,
+                               42.0,
+                               115.0,
+                               210.0]
 # Obstrucción central
-TELESCOPE_CENTRAL_OBSTRUCTION_PX = 0.0
+TELESCOPE_CENTRAL_OBSTRUCTION_PX = 45.0
 # Desplazamiento respecto del centro geométrico [px]
 #
 # +x -> derecha

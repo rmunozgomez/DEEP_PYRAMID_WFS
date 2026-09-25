@@ -67,6 +67,127 @@ def get_zernike(pupil, diameter, nModes, remove_piston=1,type="numpy"):
         zDecomposeMat, zComposeMat = torch.from_numpy(zDecomposeMat), torch.from_numpy(zComposeMat)
     return zDecomposeMat, zComposeMat
 
+
+def get_zernike_on_pupil(
+    ideal_pupil,
+    physical_pupil,
+    diameter,
+    nModes,
+    remove_piston=1,
+    type="numpy",
+):
+    """
+    Genera Zernikes clásicos sobre una pupila circular ideal y,
+    posteriormente, restringe esos modos a la pupila física.
+
+    La pseudoinversa se calcula DESPUÉS de aplicar la pupila física.
+
+    Parameters
+    ----------
+    ideal_pupil:
+        Pupila circular ideal sin obstrucción ni spiders.
+
+    physical_pupil:
+        Pupila física final que ve el sistema.
+
+    Returns
+    -------
+    zDecomposeMat:
+        [nModes, H*W]
+
+    zComposeMat:
+        [H, W, nModes]
+    """
+
+    # ------------------------------------------------------------
+    # Convertir a NumPy
+    # ------------------------------------------------------------
+
+    if torch.is_tensor(ideal_pupil):
+        ideal_np = (
+            ideal_pupil
+            .detach()
+            .cpu()
+            .numpy()
+        )
+    else:
+        ideal_np = np.asarray(ideal_pupil)
+
+    if torch.is_tensor(physical_pupil):
+        physical_np = (
+            physical_pupil
+            .detach()
+            .cpu()
+            .numpy()
+        )
+    else:
+        physical_np = np.asarray(physical_pupil)
+
+    ideal_np = np.squeeze(ideal_np)
+    physical_np = np.squeeze(physical_np)
+
+    if ideal_np.ndim != 2:
+        raise ValueError(
+            "ideal_pupil debe ser 2-D después de squeeze."
+        )
+
+    if physical_np.ndim != 2:
+        raise ValueError(
+            "physical_pupil debe ser 2-D después de squeeze."
+        )
+
+    if ideal_np.shape != physical_np.shape:
+        raise ValueError(
+            "ideal_pupil y physical_pupil deben tener "
+            "la misma resolución."
+        )
+
+    # ------------------------------------------------------------
+    # 1. Generar Zernikes en círculo perfecto
+    # ------------------------------------------------------------
+
+    _, zComposeIdeal = get_zernike(
+        pupil=ideal_np,
+        diameter=diameter,
+        nModes=nModes,
+        remove_piston=remove_piston,
+        type="numpy",
+    )
+
+    # ------------------------------------------------------------
+    # 2. Aplicar la apertura física
+    # ------------------------------------------------------------
+
+    physical_mask = (
+        physical_np > 0
+    ).astype(zComposeIdeal.dtype)
+
+    zComposeMat = (
+        zComposeIdeal
+        * physical_mask[:, :, None]
+    )
+
+    # ------------------------------------------------------------
+    # 3. Recalcular descomposición sobre apertura física
+    # ------------------------------------------------------------
+
+    resolution = physical_np.shape[0]
+
+    zDecomposeMat = np.linalg.pinv(
+        zComposeMat.reshape(
+            resolution * resolution,
+            nModes,
+        )
+    )
+
+    if type == "torch":
+        return (
+            torch.from_numpy(zDecomposeMat),
+            torch.from_numpy(zComposeMat),
+        )
+
+    return zDecomposeMat, zComposeMat
+
 def zernike_decompose_np(phi, zDecomposeMat):
     return zDecomposeMat@phi.reshape(-1)
 def zernike_compose_np(zernike_phi_vector, zComposeMat):

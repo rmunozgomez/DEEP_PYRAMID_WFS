@@ -978,6 +978,59 @@ def _build_telescope_pupil(
 
     return pupil
 
+def _as_4d_pupil(
+    pupil,
+    *,
+    device,
+    dtype,
+    resolution,
+):
+
+    if not torch.is_tensor(pupil):
+        pupil = torch.as_tensor(pupil)
+
+    pupil = pupil.to(
+        device=device,
+        dtype=dtype,
+    )
+
+    if pupil.ndim == 2:
+        pupil = pupil[
+            None,
+            None,
+            :,
+            :
+        ]
+
+    elif pupil.ndim == 3:
+
+        if pupil.shape[0] != 1:
+            raise ValueError(
+                "Pupila 3-D debe tener shape [1,H,W]."
+            )
+
+        pupil = pupil.unsqueeze(0)
+
+    elif pupil.ndim != 4:
+        raise ValueError(
+            "La pupila debe ser 2-D, 3-D o 4-D."
+        )
+
+    expected_shape = (
+        1,
+        1,
+        resolution,
+        resolution,
+    )
+
+    if tuple(pupil.shape) != expected_shape:
+        raise ValueError(
+            f"Pupila esperada {expected_shape}, "
+            f"recibida {tuple(pupil.shape)}."
+        )
+
+    return pupil.contiguous()
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Online atmospheric training"
@@ -1013,55 +1066,164 @@ def main() -> None:
 
     precision = get_precision(stages_cfg[0].train.precision)
 
-    telescope_pupil = _build_telescope_pupil(
+    # ============================================================
+    # PUPILAS
+    # ============================================================
+
+    # Pupila física definida por el telescopio:
+    # obstrucción + offset + spiders + ángulos.
+    configured_telescope_pupil = _build_telescope_pupil(
         telescope_cfg=telescope_cfg,
         device=device,
         dtype=precision.real,
     )
 
+    # Pupila circular ideal.
+    # Se usa exclusivamente para definir los Zernikes clásicos.
+    ideal_telescope_pupil = circular_pupil(
+        n=telescope_cfg.resolution,
+        device=device,
+        dtype=precision.real,
+        soft_edge_px=0.0,
+    )
+
     # ============================================================
     # ZERNIKE OR ACTUATOR BASIS
     # ============================================================
+
     dm_basis = stages_cfg[0].atmosphere.dm_basis
     dm_basis_type = stages_cfg[0].atmosphere.dm_basis_type
     dm_name = stages_cfg[0].atmosphere.dm_name
 
     if dm_basis:
+
         basis_root = Path(
-            "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/MODAL_BASIS/DEFORMABLE_MIRROR_BASIS"
+            "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/"
+            "MODAL_BASIS/DEFORMABLE_MIRROR_BASIS"
         )
 
-        basis_directory = basis_root / dm_name
+        basis_directory = (
+            basis_root
+            / dm_name
+        )
 
         if dm_basis_type == "ZERNIKE":
+
             print("DM ZERNIKE BASIS TYPE")
+
             dm_basis_path = (
                 basis_directory
-                / f"ZERNIKE_BASIS_RES_{telescope_cfg.resolution}.pt"
+                / (
+                    f"ZERNIKE_BASIS_RES_"
+                    f"{telescope_cfg.resolution}.pt"
+                )
             )
+
         else:
+
             print("DM ACTUATOR BASIS TYPE")
+
             dm_basis_path = (
                 basis_directory
-                / f"ACTUATOR_BASIS_RES_{telescope_cfg.resolution}.pt"
+                / (
+                    f"ACTUATOR_BASIS_RES_"
+                    f"{telescope_cfg.resolution}.pt"
+                )
             )
 
         dm_data = torch.load(
             dm_basis_path,
             map_location="cpu",
         )
-        zComposeMat = dm_data["zComposeMat"]
-        zDecomposeMat = dm_data["zDecomposeMat"]
+
+        # --------------------------------------------------------
+        # Base DM ORIGINAL
+        # --------------------------------------------------------
+
+        zComposeMat = dm_data[
+            "zComposeMat"
+        ]
+
+        zDecomposeMat = dm_data[
+            "zDecomposeMat"
+        ]
+
+        # --------------------------------------------------------
+        # Pupila propia de la base DM
+        # --------------------------------------------------------
+
+        if "telescope_pupil" not in dm_data:
+            raise KeyError(
+                "La base DM debe contener 'telescope_pupil'."
+            )
+
+        dm_pupil = _as_4d_pupil(
+            dm_data["telescope_pupil"],
+            device=device,
+            dtype=precision.real,
+            resolution=telescope_cfg.resolution,
+        )
+
+        # --------------------------------------------------------
+        # Pupila física final
+        #
+        # DM pupil × telescope pupil
+        # --------------------------------------------------------
+
+        telescope_pupil = (
+            dm_pupil
+            * configured_telescope_pupil
+        )
+
+        if not torch.any(
+            telescope_pupil > 0
+        ):
+            raise ValueError(
+                "La intersección entre la pupila DM y "
+                "la pupila física está vacía."
+            )
+
     else:
+
         dm_basis_path = None
         dm_basis_type = "ZERNIKE"
         dm_name = "IDEAL"
+
         print("IDEAL ZERNIKE BASIS TYPE")
 
-        zDecomposeMat, zComposeMat = get_zernike(
-            telescope_pupil.squeeze().cpu(),
+        # Pupila física del sistema.
+        telescope_pupil = (
+            configured_telescope_pupil
+        )
+
+        # --------------------------------------------------------
+        # Zernikes:
+        #
+        # 1. círculo ideal
+        # 2. aplicar pupila física
+        # 3. pseudoinversa sobre pupila física
+        # --------------------------------------------------------
+
+        (
+            zDecomposeMat,
+            zComposeMat,
+        ) = get_zernike_on_pupil(
+            ideal_pupil=(
+                ideal_telescope_pupil
+                .squeeze()
+                .cpu()
+            ),
+            physical_pupil=(
+                telescope_pupil
+                .squeeze()
+                .cpu()
+            ),
             diameter=telescope_cfg.diameter,
-            nModes=stages_cfg[0].atmosphere.n_modes,
+            nModes=(
+                stages_cfg[0]
+                .atmosphere
+                .n_modes
+            ),
             type="torch",
         )
 
@@ -1090,6 +1252,7 @@ def main() -> None:
         nHeads=wfs_cfg.heads,
         alpha=wfs_cfg.alpha,
         wavelength=source_cfg.wavelength,
+        pixel_pitch=source_cfg.pixel_pitch,
         crop_mode=wfs_cfg.return_type,
         crop_pos_noise=wfs_cfg.crop_pos_noise,
         crop_size_noise=wfs_cfg.crop_size_noise,

@@ -238,7 +238,7 @@ class Pyramid:
         # ============================================================
 
         field = pupil * torch.exp(
-            1j * phi * pupil
+            1j * phi
         )
 
         field_pad = pad2size(

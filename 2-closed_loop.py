@@ -14,8 +14,12 @@ from GENERAL_FUNCTIONS.functions_torch import *
 from NN.model_manager import ModelManager
 
 from ATMOSPHERE.atmosphere import Atmosphere
-from MODAL_BASIS.Zernike import get_zernike, zernike_compose_torch, zernike_decompose_torch
-
+from MODAL_BASIS.Zernike import (
+    get_zernike,
+    get_zernike_on_pupil,
+    zernike_compose_torch,
+    zernike_decompose_torch,
+)
 
 # =========================================================
 # USER CONFIGURATION (EDIT THIS TOP BLOCK ONLY)
@@ -78,7 +82,7 @@ psf_colormap = "hot"
 #
 # This closed-loop script uses batch_size=1 because it evaluates one common
 # evolving atmosphere shared by every model, exactly like the old script.
-r0 = 0.02
+r0 = 0.03
 fractional_r0   = [0.5, 0.3, 0.2]
 wind_direction  = [90, 240, 120]
 wind_speed      = [8.0, 10.0, 10.0]
@@ -139,10 +143,10 @@ integrator_limit = 5.0
 # -------------------------
 MODELS_TO_TEST = [
     {
-        "train_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/TRAIN/single/phiRes_128/nnRes_36/DM_BAX370_MRS/ACTUATOR/nModes_97/MODEL_TinyResNetWFS/RAMA",
+        "train_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/TRAIN/single/phiRes_128/nnRes_36/DM_BAX370_MRS/ACTUATOR/nModes_97/MODEL_ConvNeXtTiny/RAMA",
         "basis_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/MODAL_BASIS/DEFORMABLE_MIRROR_BASIS/BAX370_MRS/ACTUATOR_BASIS_RES_128.pt",
         "stage": 0,
-        "Name": "TinyResnetWFS",
+        "Name": "convNext",
     },
     
 ]
@@ -1106,19 +1110,56 @@ def build_model_basis_bundle(
     device: str,
     dtype: torch.dtype,
 ) -> ModelBasisBundle:
-    """
-    Builds or loads the basis independently for one model.
-    """
+
     Name = model_info.get("Name", "<unknown>")
+
     atmosphere_cfg = bundle["atmosphere_cfg"]
     telescope_cfg = bundle["telescope_cfg"]
+    WFS = bundle["WFS"]
 
-    resolution = int(telescope_cfg["resolution"])
-    diameter = float(telescope_cfg["diameter"])
-    n_modes = _get_model_n_modes(model_info, bundle)
+    resolution = int(
+        telescope_cfg["resolution"]
+    )
 
-    dm_basis = bool(atmosphere_cfg.get("dm_basis", False))
+    diameter = float(
+        telescope_cfg["diameter"]
+    )
 
+    n_modes = _get_model_n_modes(
+        model_info,
+        bundle,
+    )
+
+    # =========================================================
+    # Pupila física EXACTA usada durante el entrenamiento
+    # =========================================================
+
+    if not hasattr(WFS, "telescope_pupil"):
+        raise AttributeError(
+            "El WFS cargado no contiene telescope_pupil."
+        )
+
+    trained_telescope_pupil = _as_4d_pupil(
+        WFS.telescope_pupil,
+        device=device,
+        dtype=dtype,
+    )
+
+    if (
+        trained_telescope_pupil.shape[-2] != resolution
+        or trained_telescope_pupil.shape[-1] != resolution
+    ):
+        raise ValueError(
+            "WFS.telescope_pupil no coincide con "
+            "telescope_cfg['resolution']."
+        )
+
+    dm_basis = bool(
+        atmosphere_cfg.get(
+            "dm_basis",
+            False,
+        )
+    )
     if dm_basis:
         basis_path = _resolve_dm_basis_path(model_info, bundle)
 
@@ -1135,25 +1176,50 @@ def build_model_basis_bundle(
         if len(missing) > 0:
             raise KeyError(f"La base {basis_path} no contiene las llaves requeridas: {missing}")
 
-        zComposeMat = dm_data["zComposeMat"]
-        zDecomposeMat = dm_data["zDecomposeMat"]
-        telescope_pupil = dm_data["telescope_pupil"].to(device)
+        zComposeMat = dm_data[
+            "zComposeMat"
+        ]
 
-        if telescope_pupil.shape[-1] != resolution or telescope_pupil.shape[-2] != resolution:
+        zDecomposeMat = dm_data[
+            "zDecomposeMat"
+        ]
+
+        # Pupila ORIGINAL almacenada con la base DM.
+        # Solo se usa para comprobar compatibilidad.
+        dm_pupil = _as_4d_pupil(
+            dm_data["telescope_pupil"],
+            device=device,
+            dtype=dtype,
+        )
+
+        if (
+            dm_pupil.shape[-2] != resolution
+            or dm_pupil.shape[-1] != resolution
+        ):
             raise ValueError(
-                f"La pupil de la base DM de {Name} no coincide con telescope_cfg['resolution']. "
-                f"pupil={tuple(telescope_pupil.shape)}, resolution={resolution}"
+                f"La pupil de la base DM de {Name} "
+                "no coincide con telescope_cfg['resolution']. "
+                f"pupil={tuple(dm_pupil.shape)}, "
+                f"resolution={resolution}"
             )
 
-        zComposeMat = zComposeMat.to(device=device, dtype=dtype)
-        zDecomposeMat = zDecomposeMat.to(device=device, dtype=dtype)
+        # Las matrices del DM se mantienen EXACTAMENTE
+        # como fueron guardadas.
+        zComposeMat = zComposeMat.to(
+            device=device,
+            dtype=dtype,
+        )
 
+        zDecomposeMat = zDecomposeMat.to(
+            device=device,
+            dtype=dtype,
+        )
         dm_basis_type = atmosphere_cfg.get("dm_basis_type", "UNKNOWN")
         dm_name = atmosphere_cfg.get("dm_name", "UNKNOWN")
         basis_kind = f"DM_{dm_basis_type}"
 
         return ModelBasisBundle(
-            telescope_pupil=telescope_pupil,
+            telescope_pupil=trained_telescope_pupil,
             zDecomposeMat=zDecomposeMat,
             zComposeMat=zComposeMat,
             n_modes=n_modes,
@@ -1169,49 +1235,95 @@ def build_model_basis_bundle(
                 "n_modes": n_modes,
                 "zComposeMat_shape": tuple(zComposeMat.shape),
                 "zDecomposeMat_shape": tuple(zDecomposeMat.shape),
-                "telescope_pupil_shape": tuple(telescope_pupil.shape),
+                "dm_pupil_shape": tuple(dm_pupil.shape),
+                "telescope_pupil_shape": tuple(trained_telescope_pupil.shape),
             },
         )
 
-    # Standard model-specific Zernike basis.
-    telescope_pupil = circular_pupil_telescope(
+    # ============================================================
+    # STANDARD ZERNIKE BASIS
+    #
+    # Los Zernikes se generan primero sobre una pupila circular
+    # ideal y después se restringen a la pupila física utilizada
+    # durante el entrenamiento.
+    # ============================================================
+
+    ideal_pupil = circular_pupil(
         n=resolution,
         device=device,
         dtype=dtype,
+        soft_edge_px=0.0,
     )
-    telescope_pupil = _as_4d_pupil(telescope_pupil, device=device, dtype=dtype)
 
-    zDecomposeMat, zComposeMat = get_zernike(
-        pupil=telescope_pupil.squeeze().detach().cpu(),
+    (
+        zDecomposeMat,
+        zComposeMat,
+    ) = get_zernike_on_pupil(
+        ideal_pupil=(
+            ideal_pupil
+            .squeeze()
+            .detach()
+            .cpu()
+        ),
+
+        physical_pupil=(
+            trained_telescope_pupil
+            .squeeze()
+            .detach()
+            .cpu()
+        ),
+
         diameter=diameter,
         nModes=n_modes,
         type="torch",
     )
 
-    zDecomposeMat = zDecomposeMat.to(device=device, dtype=dtype)
-    zComposeMat = zComposeMat.to(device=device, dtype=dtype)
+    zDecomposeMat = zDecomposeMat.to(
+        device=device,
+        dtype=dtype,
+    )
+
+    zComposeMat = zComposeMat.to(
+        device=device,
+        dtype=dtype,
+    )
 
     return ModelBasisBundle(
-        telescope_pupil=telescope_pupil,
+        telescope_pupil=(
+            trained_telescope_pupil
+        ),
+
         zDecomposeMat=zDecomposeMat,
         zComposeMat=zComposeMat,
+
         n_modes=n_modes,
+
         basis_kind="ZERNIKE",
+
         dm_basis=False,
         dm_basis_type=None,
         dm_name=None,
         basis_path=None,
+
         info={
             "Name": Name,
             "resolution": resolution,
             "diameter": diameter,
             "n_modes": n_modes,
-            "zComposeMat_shape": tuple(zComposeMat.shape),
-            "zDecomposeMat_shape": tuple(zDecomposeMat.shape),
-            "telescope_pupil_shape": tuple(telescope_pupil.shape),
+
+            "zComposeMat_shape": tuple(
+                zComposeMat.shape
+            ),
+
+            "zDecomposeMat_shape": tuple(
+                zDecomposeMat.shape
+            ),
+
+            "telescope_pupil_shape": tuple(
+                trained_telescope_pupil.shape
+            ),
         },
     )
-
 
 def validate_shared_model_compatibility(
     model_info: Dict[str, Any],
