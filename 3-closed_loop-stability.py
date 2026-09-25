@@ -575,7 +575,7 @@ def build_noise_config_from_level(
         bg_e=_range_around(bg_base, param_jitter, log=True, min_value=1e-6),
         read_sigma_e=_range_around(read_base, param_jitter, log=False, min_value=1e-6),
         bias_dn=_range_around(bias_base, param_jitter, log=False, min_value=0.0),
-        parameter_mode="per_channel",
+        parameter_mode="per_sample",
         shot_noise="poisson",
         output_mode=output_mode,
         mono16_align="lsb",

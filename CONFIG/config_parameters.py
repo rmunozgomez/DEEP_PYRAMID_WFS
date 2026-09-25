@@ -127,7 +127,7 @@ DM_NAME = "BAX370_MRS"
 # TRAINING — PER STAGE
 # ============================================================
 PRECISION = "single"
-NORM_TYPE = ["zscore"] 
+NORM_TYPE = ["zscore_global"] # "zscore", "zscore_global"
 
 # Phi-only spatial loss.
 LOSS_TYPE = ["std"] # "std_grad_local", "std"
@@ -138,7 +138,7 @@ BATCH_SIZE = [20]
 EPOCHS = [200]
 LR = [7.5e-4]
 WEIGHT_DECAY = [0.0]
-LR_GAMMA = [0.9]
+LR_GAMMA = [0.999]
 
 CL_ITER = [20]
 CL_GAIN_RANGE = [[0.3, 1.0]]

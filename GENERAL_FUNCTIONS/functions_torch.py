@@ -464,10 +464,153 @@ def get_psf(pupil,phi,fovPx):
     psf = torch.fft.fftshift(torch.fft.fft2(phi,dim=(-2,-1)), dim=(-2,-1))
     return torch.abs(psf)**2
     
-def norm_I(I,norm=None):
-        if norm==None:
-            return I
-        elif norm=='max':
-            return I/torch.amax(I,dim=(-2,-1),keepdim=True)
-        elif norm=='zscore':
-            return (I-torch.mean(I,dim=(-2,-1),keepdim=True))/torch.std(I,dim=(-2,-1),keepdim=True)
+def norm_I(
+    I: torch.Tensor,
+    norm=None,
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """
+    Normalización de intensidades WFS.
+
+    Input:
+        I: [B, C, H, W]
+
+    Modos
+    -----
+    None / "none":
+        Sin normalización.
+
+    "zscore":
+        LEGACY. Z-score independiente por canal.
+        Se mantiene para reproducir modelos antiguos.
+
+    "zscore_global":
+        Z-score por muestra usando conjuntamente C,H,W.
+        Preserva las diferencias relativas entre las pupilas.
+
+    "max":
+        LEGACY. Máximo independiente por canal.
+
+    "max_global":
+        Divide toda la muestra por un único máximo.
+
+    "minmax":
+        Min-max conjunto por muestra.
+
+    "flux":
+        Divide por el flujo total de toda la muestra.
+    """
+
+    if I.ndim != 4:
+        raise ValueError(
+            "norm_I espera un tensor [B,C,H,W]. "
+            f"Recibido: {tuple(I.shape)}"
+        )
+
+    if norm is None:
+        return I
+
+    norm = str(norm).lower()
+
+    if norm == "none":
+        return I
+
+    # ============================================================
+    # LEGACY: normalización independiente por canal
+    # ============================================================
+
+    if norm == "zscore":
+
+        mean = I.mean(
+            dim=(-2, -1),
+            keepdim=True,
+        )
+
+        std = I.std(
+            dim=(-2, -1),
+            keepdim=True,
+            unbiased=False,
+        ).clamp_min(eps)
+
+        return (
+            I - mean
+        ) / std
+
+    if norm == "max":
+
+        denominator = I.amax(
+            dim=(-2, -1),
+            keepdim=True,
+        ).clamp_min(eps)
+
+        return I / denominator
+
+    # ============================================================
+    # NUEVO: una normalización común para todos los canales
+    # de cada muestra.
+    # ============================================================
+
+    sample_dims = (
+        1,
+        2,
+        3,
+    )
+
+    if norm == "zscore_global":
+
+        mean = I.mean(
+            dim=sample_dims,
+            keepdim=True,
+        )
+
+        std = I.std(
+            dim=sample_dims,
+            keepdim=True,
+            unbiased=False,
+        ).clamp_min(eps)
+
+        return (
+            I - mean
+        ) / std
+
+    if norm == "max_global":
+
+        denominator = I.amax(
+            dim=sample_dims,
+            keepdim=True,
+        ).clamp_min(eps)
+
+        return I / denominator
+
+    if norm == "minmax":
+
+        minimum = I.amin(
+            dim=sample_dims,
+            keepdim=True,
+        )
+
+        maximum = I.amax(
+            dim=sample_dims,
+            keepdim=True,
+        )
+
+        denominator = (
+            maximum - minimum
+        ).clamp_min(eps)
+
+        return (
+            I - minimum
+        ) / denominator
+
+    if norm == "flux":
+
+        denominator = I.sum(
+            dim=sample_dims,
+            keepdim=True,
+        ).clamp_min(eps)
+
+        return I / denominator
+
+    raise ValueError(
+        f"Normalización desconocida: {norm}"
+    )

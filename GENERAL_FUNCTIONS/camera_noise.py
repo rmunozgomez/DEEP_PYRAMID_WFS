@@ -100,7 +100,11 @@ def to_expected_electrons_from_unit(
     I = ensure_4d(I_unit)
     I = clamp_nonneg(I, 0.0)
 
-    Imax = I.amax(dim=(-2, -1), keepdim=True).clamp_min(eps)
+    Imax = I.amax(
+        dim=(-3, -2, -1),
+        keepdim=True,
+    ).clamp_min(eps)
+
     Irel = I / Imax
 
     pe = _broadcast(_as_tensor(peak_e, I), I)
@@ -583,8 +587,12 @@ def auto_electrons_to_dn_no_saturation(
     usable_max_dn = max_dn * headroom
 
     # Máximo por muestra/canal.
-    e_max = x.amax(dim=(-2, -1), keepdim=True).clamp_min(min_gain_e_per_dn)
-
+    e_max = x.amax(
+        dim=(-3, -2, -1),
+        keepdim=True,
+    ).clamp_min(
+        min_gain_e_per_dn
+    )
     # Rango disponible después del bias.
     available_dn = (usable_max_dn - bias_dn).clamp_min(1.0)
 

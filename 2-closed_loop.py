@@ -34,7 +34,7 @@ DEFAULT_DEVICE = "cuda:4"
 seed = 400
 
 # closed loop parameters
-n_samples = 500
+n_samples = 200
 cl_sample = 100
 
 kp = 0.0
@@ -143,10 +143,16 @@ integrator_limit = 5.0
 # -------------------------
 MODELS_TO_TEST = [
     {
-        "train_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/TRAIN/single/phiRes_128/nnRes_36/DM_BAX370_MRS/ACTUATOR/nModes_97/MODEL_ConvNeXtTiny/RAMA",
+        "train_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/TRAIN/single/phiRes_128/nnRes_36/DM_BAX370_MRS/ACTUATOR/nModes_97/MODEL_ConvNeXtTiny/RAMA_zscore_channels",
         "basis_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/MODAL_BASIS/DEFORMABLE_MIRROR_BASIS/BAX370_MRS/ACTUATOR_BASIS_RES_128.pt",
         "stage": 0,
-        "Name": "convNext",
+        "Name": "convNext_zscore_channel",
+    },
+    {
+        "train_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/TRAIN/single/phiRes_128/nnRes_36/DM_BAX370_MRS/ACTUATOR/nModes_97/MODEL_ConvNeXtTiny/RAMA_zscore_global",
+        "basis_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/MODAL_BASIS/DEFORMABLE_MIRROR_BASIS/BAX370_MRS/ACTUATOR_BASIS_RES_128.pt",
+        "stage": 0,
+        "Name": "convNext_zscore_global",
     },
     
 ]
@@ -385,7 +391,7 @@ def build_wfs_propagation_pupil(
 #   Para I_crop normalmente C=4; para I_full puede ser C=1.
 # =========================================================
 
-ParamMode = Literal["per_batch", "per_sample", "per_channel"]
+ParamMode = Literal["per_batch", "per_sample", "per_sample"]
 ShotNoiseMode = Literal["poisson", "gaussian"]
 OutputMode = Literal["Mono8", "Mono12", "Mono16"]
 
@@ -420,7 +426,7 @@ class CameraNoiseAugmentConfig:
     read_sigma_e: Range
     bias_dn: Range
 
-    parameter_mode: ParamMode = "per_channel"
+    parameter_mode: ParamMode = "per_sample"
     shot_noise: ShotNoiseMode = "poisson"
 
     output_mode: OutputMode = "Mono8"
@@ -460,10 +466,10 @@ def _param_shape(x: torch.Tensor, mode: ParamMode) -> Tuple[int, int]:
         return (1, 1)
     if mode == "per_sample":
         return (B, 1)
-    if mode == "per_channel":
+    if mode == "per_sample":
         return (B, C)
 
-    raise ValueError("parameter_mode debe ser 'per_batch', 'per_sample' o 'per_channel'")
+    raise ValueError("parameter_mode debe ser 'per_batch', 'per_sample' o 'per_sample'")
 
 
 def _broadcast_param(p: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
@@ -556,7 +562,7 @@ def build_noise_config_from_level(
         bg_e=_range_around(bg_base, param_jitter, log=True, min_value=1e-6),
         read_sigma_e=_range_around(read_base, param_jitter, log=False, min_value=1e-6),
         bias_dn=_range_around(bias_base, param_jitter, log=False, min_value=0.0),
-        parameter_mode="per_channel",
+        parameter_mode="per_sample",
         shot_noise="poisson",
         output_mode=output_mode,
         mono16_align="lsb",

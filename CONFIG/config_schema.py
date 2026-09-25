@@ -11,7 +11,15 @@ import math
 
 WFSReturnType = Literal["pupils", "full_frame"]
 PrecisionType = Literal["single", "double"]
-NormType = Literal["zscore", "minmax", "none"]
+NormType = Literal[
+    "zscore",
+    "zscore_global",
+    "max",
+    "max_global",
+    "minmax",
+    "flux",
+    "none",
+]
 LossType = Literal["std","std_grad_local"]
 
 SubharmonicMode = Literal["oopao", "full"]

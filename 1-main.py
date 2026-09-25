@@ -1288,7 +1288,7 @@ def main() -> None:
         p_low=0.30,
         p_normal=0.55,
         p_good=0.15,
-        parameter_mode="per_channel",
+        parameter_mode="per_sample",
         shot_noise="poisson",
         output_mode="Mono8",
         mono16_align="lsb",
