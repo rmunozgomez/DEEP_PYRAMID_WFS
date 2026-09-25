@@ -30,7 +30,7 @@ DEFAULT_DEVICE = "cuda:4"
 seed = 400
 
 # closed loop parameters
-n_samples = 25000
+n_samples = 500
 cl_sample = 100
 
 kp = 0.0
@@ -139,9 +139,10 @@ integrator_limit = 5.0
 # -------------------------
 MODELS_TO_TEST = [
     {
-        "train_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS_EVOLVE_V2/TRAIN/single/phiRes_128/nnRes_32/DM_IDEAL/ZERNIKE/nModes_209/MODEL_ConvNeXtTiny/PYR4_32_std_grad_local",
+        "train_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/TRAIN/single/phiRes_128/nnRes_36/DM_BAX370_MRS/ACTUATOR/nModes_97/MODEL_TinyResNetWFS/RAMA",
+        "basis_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/MODAL_BASIS/DEFORMABLE_MIRROR_BASIS/BAX370_MRS/ACTUATOR_BASIS_RES_128.pt",
         "stage": 0,
-        "Name": "ConvNeXTiny_32_std_grad_local_209",
+        "Name": "TinyResnetWFS",
     },
     
 ]

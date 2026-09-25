@@ -613,10 +613,9 @@ def main() -> None:
 
     if dm_basis:
         basis_root = Path(
-            "/data2/rmunoz/DEEP_WFS/"
-            "DEEP_PYRAMID_WFS_EVOLVE/DATASET/"
-            "DEFORMABLE_MIRROR_BASIS"
+            "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/MODAL_BASIS/DEFORMABLE_MIRROR_BASIS"
         )
+
         basis_directory = basis_root / dm_name
 
         if dm_basis_type == "ZERNIKE":

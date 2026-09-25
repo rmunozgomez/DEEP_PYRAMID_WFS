@@ -39,16 +39,16 @@ WFS_OFFSET = 10
 # ============================================================
 # NEURAL NETWORK
 # ============================================================
-MODEL = "ConvNeXtTiny" # "ConvNeXtTiny", "GcVit", "TinyResNetWFS"
+MODEL = "TinyResNetWFS" # "ConvNeXtTiny", "GcVit", "TinyResNetWFS"
 WTS = None
-NN_RESOLUTION = 32
+NN_RESOLUTION = 36
 
 
 # ============================================================
 # ATMOSPHERE — PER STAGE
 # ============================================================
 # Total online samples generated per epoch: train + validation.
-ATMOSPHERE_SAMPLES = [100000]
+ATMOSPHERE_SAMPLES = [100]
 
 # D/r0 is sampled uniformly inside this interval, then r0 = D / (D/r0).
 ATMOSPHERE_DR0_RANGE = [[5.0, 40.0]]
@@ -91,9 +91,9 @@ ATMOSPHERE_ASM_PADDING_FACTOR = [2.0]
 ATMOSPHERE_DELTA_WRAP_WARNING_THRESHOLD = [5.969026041820607]  # 1.9*pi
 ATMOSPHERE_TEMPORAL_REANCHOR_INTERVAL = [0]
 
-ATMOSPHERE_MODES = 209
-DM_BASIS = False
-DM_BASIS_TYPE = "ZERNIKE"  # "ACTUATOR" | "ZERNIKE"
+ATMOSPHERE_MODES = 97
+DM_BASIS = True
+DM_BASIS_TYPE = "ACTUATOR"  # "ACTUATOR" | "ZERNIKE"
 DM_NAME = "BAX370_MRS"
 
 
@@ -104,7 +104,7 @@ PRECISION = "single"
 NORM_TYPE = ["zscore"] 
 
 # Phi-only spatial loss.
-LOSS_TYPE = ["std_grad_local"] # "std_grad_local", "std"
+LOSS_TYPE = ["std"] # "std_grad_local", "std"
 LOSS_EPS = [1e-8]
 
 TRAIN_FRAC = [0.8]

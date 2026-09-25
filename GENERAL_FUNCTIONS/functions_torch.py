@@ -93,32 +93,50 @@ def circular_pupil_telescope(
     device=None,
     dtype=torch.float32,
     soft_edge_px: float = 0.0,
+
+    # Compatibilidad con implementación anterior
     spiders: int = 0,
     spiders_px: float = 0.0,
+
+    # NUEVO: ángulo exacto de cada spider
+    spider_angles_deg=None,
+
+    # Obstrucción central
     central_obstruction_diam_px: float = 0.0,
-    spider_angle_deg: float | None = None,
+
+    # NUEVO: posición absoluta (x, y) de la obstrucción en píxeles.
+    # None -> centro geométrico de la pupila
+    central_obstruction_center_px=None,
 ):
     """
-    Genera una pupila circular con opción de:
-    - borde suave
-    - obstrucción central circular
-    - spiders equiespaciados
-    - rotación aleatoria o fija de los spiders
+    Genera una pupila circular con:
 
-    Parameters
-    ----------
-    spider_angle_deg : float | None
-        Ángulo inicial de los spiders en grados [0, 360].
+    - borde externo opcionalmente suave
+    - obstrucción central de diámetro configurable
+    - posición (x,y) configurable de la obstrucción
+    - spiders de ancho configurable
+    - ángulo individual configurable para cada spider
 
-        Si es None:
-            La orientación de los spiders es aleatoria.
+    Convención angular de spider_angles_deg:
 
-        Si se entrega un valor:
-            Los spiders mantienen siempre esa misma orientación.
+        0 deg   -> derecha
+        90 deg  -> abajo
+        180 deg -> izquierda
+        270 deg -> arriba
 
-    Output shape:
+    Esto sigue las coordenadas de una imagen/matriz:
+        +x -> derecha
+        +y -> abajo
+
+    Cada ángulo representa UN brazo desde el centro hacia afuera.
+
+    Output:
         (1, 1, n, n)
     """
+
+    # ============================================================
+    # Validaciones
+    # ============================================================
 
     if n <= 0:
         raise ValueError("n debe ser > 0")
@@ -130,31 +148,65 @@ def circular_pupil_telescope(
         raise ValueError("spiders_px debe ser >= 0")
 
     if central_obstruction_diam_px < 0:
-        raise ValueError("central_obstruction_diam_px debe ser >= 0")
+        raise ValueError(
+            "central_obstruction_diam_px debe ser >= 0"
+        )
 
-    if spider_angle_deg is not None:
-        if not (0.0 <= spider_angle_deg <= 360.0):
-            raise ValueError("spider_angle_deg debe estar entre 0 y 360 grados")
+    # ============================================================
+    # Centro de la pupila principal
+    # ============================================================
 
     cx = (n - 1) / 2.0
     cy = (n - 1) / 2.0
-    radius_px = min(cx, cy, (n - 1 - cx), (n - 1 - cy))
 
-    y = torch.arange(n, device=device, dtype=torch.float32)
-    x = torch.arange(n, device=device, dtype=torch.float32)
-    X, Y = torch.meshgrid(x, y, indexing="xy")
+    radius_px = min(
+        cx,
+        cy,
+        (n - 1 - cx),
+        (n - 1 - cy),
+    )
+
+    # ============================================================
+    # Grid
+    # ============================================================
+
+    y = torch.arange(
+        n,
+        device=device,
+        dtype=torch.float32,
+    )
+
+    x = torch.arange(
+        n,
+        device=device,
+        dtype=torch.float32,
+    )
+
+    X, Y = torch.meshgrid(
+        x,
+        y,
+        indexing="xy",
+    )
 
     Xc = X - cx
     Yc = Y - cy
-    R = torch.sqrt(Xc**2 + Yc**2)
+
+    R = torch.sqrt(
+        Xc**2 + Yc**2
+    )
 
     # ============================================================
-    # Pupila circular base
+    # Pupila exterior
     # ============================================================
+
     if soft_edge_px <= 0.0:
-        pupil = (R <= radius_px).to(torch.float32)
+
+        pupil = (
+            R <= radius_px
+        ).to(torch.float32)
 
     else:
+
         w = float(soft_edge_px)
 
         pupil = torch.ones(
@@ -169,50 +221,120 @@ def circular_pupil_telescope(
             pupil,
         )
 
-        trans = (R > radius_px) & (R < (radius_px + w))
+        transition = (
+            (R > radius_px)
+            & (R < radius_px + w)
+        )
 
-        t = (R[trans] - radius_px) / w
+        t = (
+            R[transition] - radius_px
+        ) / w
 
-        pupil[trans] = 0.5 * (
-            1.0 + torch.cos(torch.pi * t)
+        pupil[transition] = (
+            0.5
+            * (
+                1.0
+                + torch.cos(torch.pi * t)
+            )
         )
 
     # ============================================================
     # Obstrucción central
     # ============================================================
+
     if central_obstruction_diam_px > 0.0:
 
-        r_obs = central_obstruction_diam_px / 2.0
+        if central_obstruction_center_px is None:
 
-        central_mask = R >= r_obs
+            obs_cx = cx
+            obs_cy = cy
 
-        pupil = pupil * central_mask.to(torch.float32)
+        else:
+
+            if len(central_obstruction_center_px) != 2:
+                raise ValueError(
+                    "central_obstruction_center_px debe ser (x, y)"
+                )
+
+            obs_cx = float(
+                central_obstruction_center_px[0]
+            )
+
+            obs_cy = float(
+                central_obstruction_center_px[1]
+            )
+
+        r_obs = (
+            float(central_obstruction_diam_px)
+            / 2.0
+        )
+
+        R_obs = torch.sqrt(
+            (X - obs_cx) ** 2
+            + (Y - obs_cy) ** 2
+        )
+
+        central_mask = (
+            R_obs >= r_obs
+        )
+
+        pupil = (
+            pupil
+            * central_mask.to(torch.float32)
+        )
 
     # ============================================================
     # Spiders
     # ============================================================
-    if spiders > 0 and spiders_px > 0.0:
+
+    if spiders_px > 0.0:
 
         # --------------------------------------------------------
-        # Ángulo inicial
+        # Ángulos explícitos
         # --------------------------------------------------------
-        if spider_angle_deg is None:
 
-            # Comportamiento original:
-            # rotación aleatoria de toda la familia de spiders
+        if spider_angles_deg is not None:
+
+            angles_deg = [
+                float(angle)
+                for angle in spider_angles_deg
+            ]
+
+        # --------------------------------------------------------
+        # Comportamiento anterior:
+        # spiders equiespaciados + rotación aleatoria
+        # --------------------------------------------------------
+
+        elif spiders > 0:
+
             theta0 = (
-                torch.rand((), device=device)
-                * (2.0 * torch.pi / spiders)
-            )
+                torch.rand(
+                    (),
+                    device=device,
+                )
+                * (
+                    360.0
+                    / float(spiders)
+                )
+            ).item()
+
+            angles_deg = [
+                theta0
+                + k
+                * (
+                    360.0
+                    / float(spiders)
+                )
+                for k in range(spiders)
+            ]
 
         else:
 
-            # Ángulo fijo entregado por el usuario
-            theta0 = torch.tensor(
-                spider_angle_deg * torch.pi / 180.0,
-                device=device,
-                dtype=torch.float32,
-            )
+            angles_deg = []
+
+        # --------------------------------------------------------
+        # Construcción de máscaras
+        # --------------------------------------------------------
 
         spider_mask = torch.ones(
             (n, n),
@@ -220,32 +342,41 @@ def circular_pupil_telescope(
             dtype=torch.float32,
         )
 
-        half_width = spiders_px / 2.0
+        half_width = (
+            float(spiders_px)
+            / 2.0
+        )
 
-        for k in range(spiders):
+        for angle_deg in angles_deg:
 
-            theta = (
-                theta0
-                + k * 2.0 * torch.pi / spiders
+            theta = torch.tensor(
+                angle_deg
+                * torch.pi
+                / 180.0,
+                device=device,
+                dtype=torch.float32,
             )
 
-            # Vector radial del spider
+            # Dirección del brazo
             ux = torch.cos(theta)
             uy = torch.sin(theta)
 
-            # Distancia perpendicular de cada pixel
-            # a la línea del spider
+            # Distancia perpendicular a la línea
             dist_to_line = torch.abs(
-                -uy * Xc + ux * Yc
+                -uy * Xc
+                + ux * Yc
             )
 
-            # Coordenada sobre la dirección radial
+            # Coordenada longitudinal del brazo
             radial_coord = (
-                ux * Xc + uy * Yc
+                ux * Xc
+                + uy * Yc
             )
 
-            # Spider solamente desde el centro hacia afuera
-            one_arm = radial_coord >= 0.0
+            # Solamente hacia un lado del centro
+            one_arm = (
+                radial_coord >= 0.0
+            )
 
             spider_region = (
                 (dist_to_line <= half_width)
@@ -261,7 +392,12 @@ def circular_pupil_telescope(
 
         pupil = pupil * spider_mask
 
-    return pupil.to(dtype).unsqueeze(0).unsqueeze(0)
+    return (
+        pupil
+        .to(dtype)
+        .unsqueeze(0)
+        .unsqueeze(0)
+    )
 
 def lens2phase(
     n: int,
