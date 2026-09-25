@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Tuple
 
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 import torch
 from tqdm import tqdm
 
@@ -65,6 +66,190 @@ def _save_curve(
     plt.savefig(figure_path, dpi=200)
     plt.close()
 
+def _get_wfs_display_geometry(
+    I_full: torch.Tensor,
+    boxes,
+    network_resolution: int,
+):
+    """
+    Calcula el escalado necesario para que cada bbox tenga
+    network_resolution x network_resolution en la representación
+    escalada.
+
+    Ejemplo:
+        full frame = 512x512
+        crop real  = 148x148
+        NN         = 36x36
+
+        scale = 36 / 148
+    """
+
+    if len(boxes) == 0:
+        raise ValueError(
+            "boxes no puede estar vacío."
+        )
+
+    H = int(I_full.shape[-2])
+    W = int(I_full.shape[-1])
+
+    x0, y0, x1, y1 = boxes[0]
+
+    crop_w = float(x1 - x0)
+    crop_h = float(y1 - y0)
+
+    if crop_w <= 0 or crop_h <= 0:
+        raise ValueError(
+            "Bounding box inválido."
+        )
+
+    # Todos los crops actualmente tienen el mismo tamaño.
+    # Lo validamos para evitar errores silenciosos.
+    for box in boxes:
+
+        bx0, by0, bx1, by1 = box
+
+        this_w = float(bx1 - bx0)
+        this_h = float(by1 - by0)
+
+        if this_w != crop_w or this_h != crop_h:
+            raise ValueError(
+                "Todos los bounding boxes deben tener "
+                "el mismo tamaño para usar un único escalado."
+            )
+
+    scale_x = (
+        float(network_resolution)
+        / crop_w
+    )
+
+    scale_y = (
+        float(network_resolution)
+        / crop_h
+    )
+
+    display_w = max(
+        1,
+        int(round(W * scale_x)),
+    )
+
+    display_h = max(
+        1,
+        int(round(H * scale_y)),
+    )
+
+    return {
+        "H": H,
+        "W": W,
+        "crop_h": crop_h,
+        "crop_w": crop_w,
+        "scale_x": scale_x,
+        "scale_y": scale_y,
+        "display_h": display_h,
+        "display_w": display_w,
+    }
+
+
+def _plot_wfs_with_boxes(
+    ax,
+    I_full: torch.Tensor,
+    boxes,
+    *,
+    network_resolution: int,
+    title: str,
+):
+    """
+    Escala el full frame con el mismo factor con que cada crop
+    termina en la resolución de entrada de la NN.
+
+    Los boxes se dibujan en el orden EXACTO de los canales
+    de entrada de la red.
+    """
+
+    geometry = _get_wfs_display_geometry(
+        I_full,
+        boxes,
+        network_resolution,
+    )
+
+    display_h = geometry["display_h"]
+    display_w = geometry["display_w"]
+
+    scale_x = geometry["scale_x"]
+    scale_y = geometry["scale_y"]
+
+    # ============================================================
+    # Escalar full frame
+    # ============================================================
+
+    I_scaled = F.interpolate(
+        I_full.float(),
+        size=(
+            display_h,
+            display_w,
+        ),
+        mode="bilinear",
+        align_corners=False,
+    )
+
+    img = (
+        I_scaled[0, 0]
+        .detach()
+        .cpu()
+        .numpy()
+    )
+
+    # ============================================================
+    # Mostrar full frame escalado
+    # ============================================================
+
+    ax.imshow(
+        img,
+        origin="upper",
+    )
+
+    # ============================================================
+    # Bounding boxes
+    # ============================================================
+
+    for idx, box in enumerate(boxes):
+
+        x0, y0, x1, y1 = box
+
+        x0 = x0 * scale_x
+        x1 = x1 * scale_x
+
+        y0 = y0 * scale_y
+        y1 = y1 * scale_y
+
+        width = x1 - x0
+        height = y1 - y0
+
+        rectangle = Rectangle(
+            (x0, y0),
+            width,
+            height,
+            fill=False,
+            linewidth=2.0,
+        )
+
+        ax.add_patch(rectangle)
+
+        # Número = canal de entrada NN
+        ax.text(
+            x0 + 1,
+            y0 + 4,
+            f"{idx}",
+            fontsize=10,
+            bbox=dict(
+                alpha=0.75,
+                edgecolor="none",
+            ),
+        )
+
+    ax.set_title(title)
+    ax.axis("off")
+
+    return I_scaled
 
 def _save_debug_val_open_last_plot(
     stage_path: Path,
@@ -445,9 +630,10 @@ def _run_open_closed_loop_batch(
         scintillation=scintillation,
     )
 
-    intensity = WFS.propagate(
+    intensity, open_boxes = WFS.propagate(
         phi=phi0,
         pupil=effective_pupil0,
+        return_boxes=True,
     )
     if train_cfg.noise:
         intensity = noise_pipe(intensity)
@@ -489,6 +675,7 @@ def _run_open_closed_loop_batch(
         effective_pupil0,
         intensity,
         prediction,
+        open_boxes,
     )
     last_debug = open_debug
 
@@ -516,9 +703,10 @@ def _run_open_closed_loop_batch(
                 phi_atmosphere - phi_correction
             ) * telescope_pupil
 
-        intensity_closed = WFS.propagate(
+        intensity_closed, closed_boxes = WFS.propagate(
             phi=phi_state,
             pupil=effective_pupil_atmosphere,
+            return_boxes=True,
         )
         if train_cfg.noise:
             intensity_closed = noise_pipe(intensity_closed)
@@ -549,6 +737,7 @@ def _run_open_closed_loop_batch(
             effective_pupil_atmosphere,
             intensity_closed,
             residual_prediction,
+            closed_boxes,
         )
 
     total_loss = total_loss / (int(train_cfg.cl_iter) + 1)
@@ -802,6 +991,63 @@ def main() -> None:
     torch.save(WFS, wfs_path / "WFS.pt")
 
     # ============================================================
+    # FLAT WFS + NETWORK BOUNDING BOXES
+    # ============================================================
+
+    with torch.no_grad():
+
+        flat_phi = torch.zeros(
+            (
+                1,
+                1,
+                telescope_cfg.resolution,
+                telescope_cfg.resolution,
+            ),
+            device=device,
+            dtype=precision.real,
+        )
+
+        (
+            flat_full,
+            flat_network,
+            flat_boxes,
+        ) = WFS.propagate(
+            phi=flat_phi,
+            pupil=telescope_pupil,
+            return_both=True,
+            return_boxes=True,
+        )
+
+        fig, ax = plt.subplots(
+            1,
+            1,
+            figsize=(6, 6),
+            dpi=160,
+        )
+
+        _plot_wfs_with_boxes(
+            ax,
+            flat_full,
+            flat_boxes,
+            network_resolution=model_cfg.resolution,
+            title=(
+                "FLAT WFS | "
+                f"NN input: {model_cfg.resolution}x"
+                f"{model_cfg.resolution}"
+            ),
+        )
+
+        fig.tight_layout()
+
+        fig.savefig(
+            wfs_figures_path / "wfs_flat.png",
+            dpi=200,
+            bbox_inches="tight",
+        )
+
+        plt.close(fig)
+
+    # ============================================================
     # BASIS SANITY PLOTS
     # ============================================================
     basis_amplitude = 0.1 if dm_basis else 5.0
@@ -823,16 +1069,28 @@ def main() -> None:
             zComposeMat,
         )
 
-        intensity_positive = WFS.propagate(
+        (
+            intensity_positive_full,
+            intensity_positive_network,
+            boxes_positive,
+        ) = WFS.propagate(
             pupil=telescope_pupil,
             phi=phi_positive,
-            no_crop=True,
+            return_both=True,
+            return_boxes=True,
         )
-        intensity_negative = WFS.propagate(
+
+        (
+            intensity_negative_full,
+            intensity_negative_network,
+            boxes_negative,
+        ) = WFS.propagate(
             pupil=telescope_pupil,
             phi=phi_negative,
-            no_crop=True,
+            return_both=True,
+            return_boxes=True,
         )
+
 
         fig, axes = plt.subplots(2, 2, figsize=(9, 8))
         axes[0, 0].imshow(phi_positive.squeeze().cpu())
@@ -841,11 +1099,13 @@ def main() -> None:
         )
         axes[0, 0].axis("off")
 
-        axes[0, 1].imshow(
-            intensity_positive.squeeze().cpu()
+        _plot_wfs_with_boxes(
+            axes[0, 1],
+            intensity_positive_full,
+            boxes_positive,
+            network_resolution=model_cfg.resolution,
+            title="Pyramid propagation + NN crops",
         )
-        axes[0, 1].set_title("Pyramid propagation")
-        axes[0, 1].axis("off")
 
         axes[1, 0].imshow(phi_negative.squeeze().cpu())
         axes[1, 0].set_title(
@@ -853,11 +1113,13 @@ def main() -> None:
         )
         axes[1, 0].axis("off")
 
-        axes[1, 1].imshow(
-            intensity_negative.squeeze().cpu()
+        _plot_wfs_with_boxes(
+            axes[1, 1],
+            intensity_negative_full,
+            boxes_negative,
+            network_resolution=model_cfg.resolution,
+            title="Pyramid propagation + NN crops",
         )
-        axes[1, 1].set_title("Pyramid propagation")
-        axes[1, 1].axis("off")
 
         fig.tight_layout()
         fig.savefig(
@@ -975,10 +1237,15 @@ def main() -> None:
                     effective_pupil_test_full_batch[0:1]
                 )
 
-                intensity_test = WFS.propagate(
+                (
+                    intensity_test_full,
+                    intensity_test_network,
+                    intensity_test_boxes,
+                ) = WFS.propagate(
                     phi=phi_test,
                     pupil=effective_pupil_test,
-                    no_crop=True,
+                    return_both=True,
+                    return_boxes=True,
                 )
                 if train_cfg.noise:
                     _seed_global_torch(
@@ -1005,11 +1272,13 @@ def main() -> None:
                     amplitude_test[0, 0].detach().cpu()
                 )
                 axes[1].axis("off")
-                axes[2].set_title("WFS intensity")
-                axes[2].imshow(
-                    intensity_test[0, 0].detach().cpu()
+                _plot_wfs_with_boxes(
+                    axes[2],
+                    intensity_test_full,
+                    intensity_test_boxes,
+                    network_resolution=model_cfg.resolution,
+                    title="WFS intensity + NN crops",
                 )
-                axes[2].axis("off")
                 fig.tight_layout()
                 fig.savefig(
                     wfs_figures_path
@@ -1244,13 +1513,16 @@ def main() -> None:
                         open_effective_pupil,
                         open_I,
                         open_pred,
+                        open_boxes,
                     ) = output["open_debug"]
+
                     (
                         last_phi,
                         last_amplitude,
                         last_effective_pupil,
                         last_I,
                         last_pred,
+                        last_boxes,
                     ) = output["last_debug"]
 
                     running_loss += float(
@@ -1278,18 +1550,30 @@ def main() -> None:
                     last_val_pack = {
                         "open_phi": open_phi[-1:].cpu(),
                         "open_amplitude": open_amplitude[-1:].cpu(),
+
                         "open_effective_pupil": (
                             open_effective_pupil[-1:].cpu()
                         ),
+
                         "open_I": open_I[-1:].cpu(),
                         "open_pred": open_pred[-1:].cpu(),
+
+                        # NUEVO
+                        "open_boxes": open_boxes,
+
                         "last_phi": last_phi[-1:].cpu(),
                         "last_amplitude": last_amplitude[-1:].cpu(),
+
                         "last_effective_pupil": (
                             last_effective_pupil[-1:].cpu()
                         ),
+
                         "last_I": last_I[-1:].cpu(),
                         "last_pred": last_pred[-1:].cpu(),
+
+                        # NUEVO
+                        "last_boxes": last_boxes,
+
                         "profile": asdict(profile),
                     }
 

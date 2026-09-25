@@ -176,48 +176,151 @@ class Pyramid:
         )
         self.piston_wfs = self.propagate(pupil=self.telescope_pupil, phi = self.telescope_pupil)
 
-    def propagate(self, phi, pupil, no_crop = False,return_both = False):
+    def propagate(
+        self,
+        phi,
+        pupil,
+        no_crop=False,
+        return_both=False,
+        return_boxes=False,
+    ):
         """
         phi:   [B, 1, N, N]
         pupil: [1, 1, N, N] o [B, 1, N, N]
-        Retorna:
-        I:     [B, 1, R, R]   con R = self.resolution
+
+        Opciones
+        --------
+        no_crop=True
+            -> I_full
+
+        return_both=True
+            -> I_full, I_resized
+
+        return_boxes=True
+            -> además devuelve los bounding boxes EXACTOS
+            usados por crop_pyr.
+
+        Los boxes tienen formato:
+            (x0, y0, x1, y1)
+
+        y están expresados en coordenadas del I_full original.
         """
-        # Campo complejo en la pupila
-        field = pupil * torch.exp(1j * phi * pupil)   # broadcasting soporta pupil [1,1,N,N]
 
-        # Padding batch-aware
-        field_pad = pad2size(field, (self.filter_resolution_total, self.filter_resolution_total))  # [B,1,R,R]
+        # ============================================================
+        # Campo complejo
+        # ============================================================
 
-        # FFT2 sobre las dos últimas dimensiones
+        field = pupil * torch.exp(
+            1j * phi * pupil
+        )
+
+        field_pad = pad2size(
+            field,
+            (
+                self.filter_resolution_total,
+                self.filter_resolution_total,
+            ),
+        )
+
+        # ============================================================
+        # Fourier plane
+        # ============================================================
+
         psf = torch.fft.fftshift(
-            torch.fft.fft2(field_pad, dim=(-2, -1)),
-            dim=(-2, -1)
-        )  # [B,1,R,R]
+            torch.fft.fft2(
+                field_pad,
+                dim=(-2, -1),
+            ),
+            dim=(-2, -1),
+        )
 
-        psf_dummy = (torch.abs(psf[0,:,:,:])**2).unsqueeze(0)
+        # ============================================================
+        # Pyramid
+        # ============================================================
 
         wfs_psf = psf * self.mask_phasor
-        prop = torch.fft.fft2(wfs_psf, dim=(-2, -1))
+
+        prop = torch.fft.fft2(
+            wfs_psf,
+            dim=(-2, -1),
+        )
+
         I_full = torch.abs(prop) ** 2
-        I_full = torch.flip(I_full, dims=[3])
-        I_full = torch.flip(I_full, dims=[2])
 
+        I_full = torch.flip(
+            I_full,
+            dims=[3],
+        )
 
-        if no_crop is False:
-            if return_both:
-                I_crop = self.crop_pyr(I_full)
-                I_resized = self.resize_tensor(I_crop, M = self.output_resolution)
-                return I_full, I_resized
-            if self.crop_mode == "pupils":
-                I_crop = self.crop_pyr(I_full)
-                I_resized = self.resize_tensor(I_crop, M = self.output_resolution)
-                P1_dummy = I_resized[:,0,:,:].unsqueeze(1)
+        I_full = torch.flip(
+            I_full,
+            dims=[2],
+        )
 
-                return I_resized
-        else:
+        # ============================================================
+        # Full frame
+        # ============================================================
+
+        if no_crop:
             return I_full
-        
+
+        # ============================================================
+        # Crops
+        # ============================================================
+
+        if self.crop_mode == "pupils":
+
+            if return_boxes:
+
+                I_crop, boxes = self.crop_pyr(
+                    I_full,
+                    return_boxes=True,
+                )
+
+            else:
+
+                I_crop = self.crop_pyr(
+                    I_full,
+                    return_boxes=False,
+                )
+
+                boxes = None
+
+            # --------------------------------------------------------
+            # Resize a resolución de la NN
+            # --------------------------------------------------------
+
+            I_resized = self.resize_tensor(
+                I_crop,
+                M=self.output_resolution,
+            )
+
+            # --------------------------------------------------------
+            # Returns
+            # --------------------------------------------------------
+
+            if return_both and return_boxes:
+                return (
+                    I_full,
+                    I_resized,
+                    boxes,
+                )
+
+            if return_both:
+                return (
+                    I_full,
+                    I_resized,
+                )
+
+            if return_boxes:
+                return (
+                    I_resized,
+                    boxes,
+                )
+
+            return I_resized
+
+        return I_full        
 
     
     def __call__(self, phi, pupil):
@@ -232,86 +335,274 @@ class Pyramid:
         #sz += (torch.randint(low=l , high= 1 + h, size=(1,)))
         return x,y,sz
 
-    def crop_pyr(self, intensity: torch.Tensor) -> torch.Tensor:
+    def crop_pyr(
+        self,
+        intensity: torch.Tensor,
+        return_boxes: bool = False,
+    ):
+        """
+        Crop de las pupilas del PWFS.
+
+        Parameters
+        ----------
+        intensity:
+            [B, 1, H, W]
+
+        return_boxes:
+            Si True, además retorna:
+
+            boxes = [
+                (x0, y0, x1, y1),
+                ...
+            ]
+
+            en coordenadas del frame ORIGINAL, antes del padding.
+
+        Returns
+        -------
+        crops:
+            [B, N, crop_size, crop_size]
+
+        boxes:
+            opcional.
+        """
+
+        # ============================================================
+        # Caso especial resolution == 32
+        # ============================================================
+
         if self.telescope_resolution == 32:
+
             B, C, H, W = intensity.shape
             N = self.coords.shape[0]
-            sz_crop = 36
-            x_crop = [23,71,23,71]
-            y_crop = [23,23,71,71]
 
+            sz_crop = 36
+
+            x_crop = [
+                23,
+                71,
+                23,
+                71,
+            ]
+
+            y_crop = [
+                23,
+                23,
+                71,
+                71,
+            ]
 
             crops = torch.zeros(
-            (B, N, sz_crop, sz_crop),
-            device=intensity.device,
-            dtype=intensity.dtype
+                (
+                    B,
+                    N,
+                    sz_crop,
+                    sz_crop,
+                ),
+                device=intensity.device,
+                dtype=intensity.dtype,
             )
+
+            boxes = []
+
             for face in range(N):
-                x,y,sz = x_crop[face],y_crop[face],sz_crop
-                x,y,sz = self.add_jitter(x,y,sz)
-                I_face = intensity[:,:,y:y+sz,x:x+sz]
-                I_face_dummy = I_face
-                crops[:,face,:,:] = I_face[:,0,:,:]
+
+                x = x_crop[face]
+                y = y_crop[face]
+                sz = sz_crop
+
+                x, y, sz = self.add_jitter(
+                    x,
+                    y,
+                    sz,
+                )
+
+                x = int(x)
+                y = int(y)
+
+                I_face = intensity[
+                    :,
+                    :,
+                    y:y + sz,
+                    x:x + sz,
+                ]
+
+                crops[:, face, :, :] = (
+                    I_face[:, 0, :, :]
+                )
+
+                boxes.append(
+                    (
+                        x,
+                        y,
+                        x + sz,
+                        y + sz,
+                    )
+                )
+
+            if return_boxes:
+                return crops, boxes
+
             return crops
-        """
-        intensity: [B, 1, H, W]
 
-        Usa:
-        - self.coords[:,0] = x
-        - self.coords[:,1] = y
-        - self.crop_sizes[n] = lado del crop n
+        # ============================================================
+        # Caso general
+        # ============================================================
 
-        Si hubo solape, self.coords tendrá shape [1,2] y self.crop_sizes [1].
-        Si no hubo solape, habrá un crop por cara.
-        """
         B, C, H, W = intensity.shape
         N = self.coords.shape[0]
 
-        crop_sizes = np.asarray(self.crop_sizes, dtype=np.int64).reshape(-1)
-        if crop_sizes.shape[0] != N:
-            raise ValueError("self.crop_sizes debe tener el mismo largo que self.coords")
+        crop_sizes = np.asarray(
+            self.crop_sizes,
+            dtype=np.int64,
+        ).reshape(-1)
 
-        max_size = int(np.max(crop_sizes)) + int(torch.randint(-self.crop_size_noise, self.crop_size_noise + 1, (1,), device=intensity.device).item())
+        if crop_sizes.shape[0] != N:
+            raise ValueError(
+                "self.crop_sizes debe tener el mismo largo que self.coords"
+            )
+
+        # ============================================================
+        # Tamaño REAL utilizado en esta propagación
+        # ============================================================
+
+        max_size = int(
+            np.max(crop_sizes)
+        )
+
+        if self.crop_size_noise > 0:
+
+            size_jitter = int(
+                torch.randint(
+                    -self.crop_size_noise,
+                    self.crop_size_noise + 1,
+                    (1,),
+                    device=intensity.device,
+                ).item()
+            )
+
+            max_size += size_jitter
+
+        # Forzar tamaño par
         if max_size % 2 != 0:
             max_size += 1
+
         max_half = max_size // 2
+
+        # ============================================================
+        # Padding
+        # ============================================================
 
         intensity_pad = F.pad(
             intensity,
-            (max_half, max_half, max_half, max_half),
+            (
+                max_half,
+                max_half,
+                max_half,
+                max_half,
+            ),
             mode="constant",
-            value=0.0
+            value=0.0,
         )
 
         crops = torch.zeros(
-            (B, N, max_size, max_size),
+            (
+                B,
+                N,
+                max_size,
+                max_size,
+            ),
             device=intensity.device,
-            dtype=intensity.dtype
+            dtype=intensity.dtype,
         )
 
+        boxes = []
+
+        # ============================================================
+        # Pupilas
+        # ============================================================
+
         for n in range(N):
-            size_n = max_size#int(crop_sizes[n])
+
+            size_n = max_size
+
             if size_n % 2 != 0:
                 size_n += 1
+
             half_n = size_n // 2
 
+            # --------------------------------------------------------
+            # Position jitter REAL
+            # --------------------------------------------------------
+
             if self.crop_pos_noise > 0:
-                dx = int(torch.randint(-self.crop_pos_noise, self.crop_pos_noise + 1, (1,), device=intensity.device).item())
-                dy = int(torch.randint(-self.crop_pos_noise, self.crop_pos_noise + 1, (1,), device=intensity.device).item())
+
+                dx = int(
+                    torch.randint(
+                        -self.crop_pos_noise,
+                        self.crop_pos_noise + 1,
+                        (1,),
+                        device=intensity.device,
+                    ).item()
+                )
+
+                dy = int(
+                    torch.randint(
+                        -self.crop_pos_noise,
+                        self.crop_pos_noise + 1,
+                        (1,),
+                        device=intensity.device,
+                    ).item()
+                )
+
             else:
+
                 dx = 0
                 dy = 0
+
+            # --------------------------------------------------------
+            # Centro en coordenadas del FULL FRAME
+            # --------------------------------------------------------
 
             x = int(self.coords[n, 0]) + dx
             y = int(self.coords[n, 1]) + dy
 
-            x += max_half
-            y += max_half
+            # --------------------------------------------------------
+            # Bounding box ORIGINAL
+            # --------------------------------------------------------
 
-            crop = intensity_pad[:, 0, y - half_n:y + half_n, x - half_n:x + half_n]
+            x0 = x - half_n
+            x1 = x + half_n
 
-            start = (max_size - size_n) // 2
-            end = start + size_n
-            crops[:, n, start:end, start:end] = crop
+            y0 = y - half_n
+            y1 = y + half_n
+
+            boxes.append(
+                (
+                    x0,
+                    y0,
+                    x1,
+                    y1,
+                )
+            )
+
+            # --------------------------------------------------------
+            # Pasar a coordenadas padded
+            # --------------------------------------------------------
+
+            xp = x + max_half
+            yp = y + max_half
+
+            crop = intensity_pad[
+                :,
+                0,
+                yp - half_n:yp + half_n,
+                xp - half_n:xp + half_n,
+            ]
+
+            crops[:, n, :, :] = crop
+
+        if return_boxes:
+            return crops, boxes
 
         return crops
