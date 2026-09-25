@@ -389,39 +389,44 @@ class Pyramid:
 
         for b in range(B):
 
-            for n in range(N):
+            # ========================================================
+            # Crop size jitter
+            # Uno distinto por imagen del batch,
+            # pero compartido entre todas sus pupilas.
+            # ========================================================
 
-                # ====================================================
-                # Crop size jitter
-                # ====================================================
+            if self.crop_size_noise > 0:
 
-                if self.crop_size_noise > 0:
-
-                    size_step = int(
-                        torch.randint(
-                            low=-self.crop_size_noise,
-                            high=self.crop_size_noise + 1,
-                            size=(1,),
-                            device=intensity.device,
-                        ).item()
-                    )
-
-                else:
-
-                    size_step = 0
-
-                size_n = (
-                    base_size
-                    + 2 * size_step
+                size_step = int(
+                    torch.randint(
+                        low=-self.crop_size_noise,
+                        high=self.crop_size_noise + 1,
+                        size=(1,),
+                        device=intensity.device,
+                    ).item()
                 )
 
-                if size_n <= 0:
-                    raise ValueError(
-                        f"Crop size inválido: {size_n}"
-                    )
+            else:
 
-                half_n = size_n // 2
+                size_step = 0
 
+            size_n = (
+                base_size
+                + 2 * size_step
+            )
+
+            if size_n <= 0:
+                raise ValueError(
+                    f"Crop size inválido: {size_n}"
+                )
+
+            half_n = size_n // 2
+
+            # ========================================================
+            # Pupilas
+            # ========================================================
+
+            for n in range(N):
                 # ====================================================
                 # Position jitter
                 # ====================================================
