@@ -10,6 +10,7 @@ from typing import Tuple
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 
 from ATMOSPHERE.atmosphere import Atmosphere
@@ -1247,14 +1248,6 @@ def main() -> None:
                     return_both=True,
                     return_boxes=True,
                 )
-                if train_cfg.noise:
-                    _seed_global_torch(
-                        sanity_seed,
-                        device,
-                    )
-                    intensity_test = noise_pipe(
-                        intensity_test
-                    )
 
                 fig, axes = plt.subplots(
                     1,
