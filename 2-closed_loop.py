@@ -6,6 +6,8 @@ import numpy as np
 from tqdm import tqdm
 import imageio.v2 as imageio
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 from dataclasses import dataclass, field
 from typing import Dict, Tuple, Optional, Literal, Union, Any
 
@@ -53,6 +55,43 @@ propagation_soft_edge_px = 0.0
 # La familia de spiders recibe una rotación aleatoria, pero queda fija durante
 # toda la ejecución para representar una pupila física estática.
 propagation_pupil_seed = seed
+
+
+# =========================================================
+# PHYSICAL PUPIL / CAMERA COMPATIBILITY OPTIONS
+# =========================================================
+# "model"    -> exact WFS.telescope_pupil stored with the trained model.
+# "analytic" -> model pupil + configurable obstruction/spiders.
+# "tensor"   -> external .pt/.pth/.npy pupil.
+#
+# Modal matrices are intentionally NOT recomputed when the physical pupil
+# changes. The NN/control basis therefore remains exactly the trained/calibrated
+# basis, which is the conservative behavior for closed-loop evaluation.
+physical_pupil_mode = "model"                 # "model" | "analytic" | "tensor"
+
+# External pupil (physical_pupil_mode == "tensor")
+custom_pupil_path = None                      # e.g. "/path/pupil.pt"
+custom_pupil_intersect_model_support = True
+custom_pupil_normalize = True
+
+# Analytic pupil (physical_pupil_mode == "analytic")
+# Diameter/count/width continue to use propagation_* variables above so old
+# command-line parameters remain useful.
+custom_obstruction_offset_x_px = 0.0          # +x -> right
+custom_obstruction_offset_y_px = 0.0          # +y -> down (image coordinates)
+custom_spider_angles_deg = None               # e.g. [17., 103., 197., 283.]
+custom_spider_origin_offset_x_px = None       # None -> obstruction center
+custom_spider_origin_offset_y_px = None       # None -> obstruction center
+custom_spider_bidirectional = False           # False radial arm, True full line
+
+# Diagnostic only. Saved by the normal closed-loop helper.
+save_wfs_crop_boxes_diagnostic = True
+
+# "legacy_independent" preserves your validated stochastic behavior:
+# I_full and I_crop receive independent noise realizations.
+# "full_frame" is the physically consistent alternative: one noisy detector
+# frame is generated first and the exact NN crops are extracted from it.
+camera_noise_domain = "legacy_independent"    # "legacy_independent" | "full_frame"
 
 # Noise test mode:
 #   noise_level = 0..10
@@ -238,6 +277,69 @@ def circular_pupil(
     return pupil.to(dtype).unsqueeze(0).unsqueeze(0)
 
 
+
+def _load_custom_pupil_from_path(
+    path: str,
+    *,
+    reference_pupil: torch.Tensor,
+    normalize: bool = True,
+    intersect_model_support: bool = True,
+) -> torch.Tensor:
+    """Load an external pupil and return shape (1,1,H,W)."""
+    if path is None:
+        raise ValueError("physical_pupil_mode='tensor' requires custom_pupil_path")
+
+    pupil_path = os.path.expanduser(str(path))
+    if not os.path.exists(pupil_path):
+        raise FileNotFoundError(f"Custom pupil not found: {pupil_path}")
+
+    if pupil_path.lower().endswith(".npy"):
+        data = np.load(pupil_path)
+    else:
+        data = torch.load(pupil_path, map_location="cpu", weights_only=False)
+        if isinstance(data, dict):
+            for key in ("pupil", "telescope_pupil", "mask"):
+                if key in data:
+                    data = data[key]
+                    break
+            else:
+                raise KeyError(
+                    "Custom pupil dict must contain 'pupil', 'telescope_pupil' or 'mask'"
+                )
+
+    pupil = torch.as_tensor(data, dtype=reference_pupil.dtype)
+    while pupil.ndim > 2 and pupil.shape[0] == 1:
+        pupil = pupil.squeeze(0)
+
+    if pupil.ndim != 2:
+        raise ValueError(f"Custom pupil must reduce to 2D; got {tuple(pupil.shape)}")
+
+    H, W = reference_pupil.shape[-2:]
+    if tuple(pupil.shape) != (H, W):
+        raise ValueError(
+            f"Custom pupil shape {tuple(pupil.shape)} != model pupil {(H, W)}"
+        )
+    if not torch.isfinite(pupil).all():
+        raise ValueError("Custom pupil contains NaN/Inf")
+    if float(pupil.min().item()) < 0.0:
+        raise ValueError("Custom pupil cannot contain negative amplitudes")
+
+    pupil = pupil.to(
+        device=reference_pupil.device,
+        dtype=reference_pupil.dtype,
+    )[None, None]
+
+    if normalize:
+        vmax = pupil.amax()
+        if float(vmax.item()) > 0.0:
+            pupil = pupil / vmax
+
+    if intersect_model_support:
+        pupil = pupil * reference_pupil.clamp_min(0.0)
+
+    return pupil
+
+
 def circular_pupil_telescope(
     n: int,
     *,
@@ -247,35 +349,35 @@ def circular_pupil_telescope(
     spiders: int = 0,
     spiders_px: float = 0.0,
     central_obstruction_diam_px: float = 0.0,
+    central_obstruction_offset_x_px: float = 0.0,
+    central_obstruction_offset_y_px: float = 0.0,
+    spider_angles_deg=None,
+    spider_origin_offset_x_px=None,
+    spider_origin_offset_y_px=None,
+    spider_bidirectional: bool = False,
     theta0: Optional[torch.Tensor] = None,
 ):
     """
-    Pupila circular con obstrucción central y spiders radiales equiespaciados.
+    Circular mask with displaced central obstruction and configurable spiders.
 
-    ``theta0`` permite fijar la rotación inicial. Si es None, se genera una
-    rotación aleatoria. La salida tiene shape (1,1,n,n).
+    Angle convention: 0 deg -> +X, 90 deg -> +Y. With
+    spider_bidirectional=False each angle describes one radial arm.
     """
     if n <= 0:
-        raise ValueError("n debe ser > 0")
-    if spiders < 0:
-        raise ValueError("spiders debe ser >= 0")
-    if spiders_px < 0:
-        raise ValueError("spiders_px debe ser >= 0")
-    if central_obstruction_diam_px < 0:
-        raise ValueError("central_obstruction_diam_px debe ser >= 0")
+        raise ValueError("n must be > 0")
+    if spiders < 0 or spiders_px < 0 or central_obstruction_diam_px < 0:
+        raise ValueError("spider/obstruction parameters must be non-negative")
     if central_obstruction_diam_px > n:
-        raise ValueError("central_obstruction_diam_px no puede ser mayor que n")
+        raise ValueError("central_obstruction_diam_px cannot exceed n")
 
     cx = (n - 1) / 2.0
     cy = (n - 1) / 2.0
-    radius_px = min(cx, cy, (n - 1 - cx), (n - 1 - cy))
+    radius_px = min(cx, cy, n - 1 - cx, n - 1 - cy)
 
     y = torch.arange(n, device=device, dtype=torch.float32)
     x = torch.arange(n, device=device, dtype=torch.float32)
     X, Y = torch.meshgrid(x, y, indexing="xy")
-    Xc = X - cx
-    Yc = Y - cy
-    R = torch.sqrt(Xc**2 + Yc**2)
+    R_outer = torch.sqrt((X - cx) ** 2 + (Y - cy) ** 2)
 
     pupil = circular_pupil(
         n=n,
@@ -284,35 +386,63 @@ def circular_pupil_telescope(
         soft_edge_px=soft_edge_px,
     ).squeeze(0).squeeze(0)
 
+    obs_cx = cx + float(central_obstruction_offset_x_px)
+    obs_cy = cy + float(central_obstruction_offset_y_px)
     if central_obstruction_diam_px > 0.0:
         r_obs = float(central_obstruction_diam_px) / 2.0
-        pupil = pupil * (R >= r_obs).to(torch.float32)
+        R_obs = torch.sqrt((X - obs_cx) ** 2 + (Y - obs_cy) ** 2)
+        pupil = pupil * (R_obs >= r_obs).to(torch.float32)
 
-    if spiders > 0 and spiders_px > 0.0:
+    if spider_angles_deg is not None:
+        angles = torch.tensor(
+            np.deg2rad([float(v) for v in spider_angles_deg]),
+            device=device,
+            dtype=torch.float32,
+        )
+    elif spiders > 0:
         if theta0 is None:
             theta0 = torch.rand((), device=device) * (2.0 * torch.pi / spiders)
         else:
             theta0 = torch.as_tensor(theta0, device=device, dtype=torch.float32)
+        angles = torch.stack(
+            [theta0 + k * 2.0 * torch.pi / spiders for k in range(spiders)]
+        )
+    else:
+        angles = torch.empty((0,), device=device, dtype=torch.float32)
 
+    if angles.numel() > 0 and spiders_px > 0.0:
+        sx = (
+            float(central_obstruction_offset_x_px)
+            if spider_origin_offset_x_px is None
+            else float(spider_origin_offset_x_px)
+        )
+        sy = (
+            float(central_obstruction_offset_y_px)
+            if spider_origin_offset_y_px is None
+            else float(spider_origin_offset_y_px)
+        )
+        Xs = X - (cx + sx)
+        Ys = Y - (cy + sy)
         spider_mask = torch.ones((n, n), device=device, dtype=torch.float32)
         half_width = float(spiders_px) / 2.0
 
-        for k in range(spiders):
-            theta = theta0 + k * 2.0 * torch.pi / spiders
+        for theta in angles:
             ux = torch.cos(theta)
             uy = torch.sin(theta)
-
-            dist_to_line = torch.abs(-uy * Xc + ux * Yc)
-            radial_coord = ux * Xc + uy * Yc
-            one_arm = radial_coord >= 0.0
-
-            spider_region = (
+            dist_to_line = torch.abs(-uy * Xs + ux * Ys)
+            radial_coord = ux * Xs + uy * Ys
+            arm = (
+                torch.ones_like(radial_coord, dtype=torch.bool)
+                if spider_bidirectional
+                else radial_coord >= 0.0
+            )
+            region = (
                 (dist_to_line <= half_width)
-                & one_arm
-                & (R <= radius_px)
+                & arm
+                & (R_outer <= radius_px)
             )
             spider_mask = torch.where(
-                spider_region,
+                region,
                 torch.zeros_like(spider_mask),
                 spider_mask,
             )
@@ -332,36 +462,50 @@ def build_wfs_propagation_pupil(
     soft_edge_px: float = 0.0,
     seed: Optional[int] = None,
 ) -> torch.Tensor:
-    """
-    Construye la pupila usada únicamente por el WFS.
+    """Select physical pupil while leaving the trained modal basis untouched."""
+    if ideal_pupil.ndim != 4 or ideal_pupil.shape[:2] != (1, 1):
+        raise ValueError(f"ideal_pupil must be (1,1,H,W); got {tuple(ideal_pupil.shape)}")
+    if ideal_pupil.shape[-2] != ideal_pupil.shape[-1]:
+        raise ValueError("Pupil must be square")
 
-    La máscara telescópica se multiplica por ``ideal_pupil`` para conservar
-    exactamente la apertura exterior y cualquier máscara propia de una base DM.
-    ``ideal_pupil`` nunca se modifica in-place.
-    """
+    # Historical master switch: disabling custom propagation returns model pupil.
     if not enabled:
         return ideal_pupil.clone()
 
-    if ideal_pupil.ndim != 4 or ideal_pupil.shape[0] != 1 or ideal_pupil.shape[1] != 1:
-        raise ValueError(
-            "ideal_pupil debe tener shape (1,1,H,W). "
-            f"Llegó {tuple(ideal_pupil.shape)}"
+    mode = str(physical_pupil_mode).strip().lower()
+    if mode == "model":
+        return ideal_pupil.clone()
+
+    if mode == "tensor":
+        return _load_custom_pupil_from_path(
+            custom_pupil_path,
+            reference_pupil=ideal_pupil,
+            normalize=bool(custom_pupil_normalize),
+            intersect_model_support=bool(custom_pupil_intersect_model_support),
         )
-    if ideal_pupil.shape[-2] != ideal_pupil.shape[-1]:
-        raise ValueError("La pupila debe ser cuadrada para construir spiders y obstrucción.")
+
+    if mode != "analytic":
+        raise ValueError(
+            "physical_pupil_mode must be 'model', 'analytic' or 'tensor'; "
+            f"got {physical_pupil_mode!r}"
+        )
 
     n = int(ideal_pupil.shape[-1])
     theta0 = None
-    if spiders > 0 and spiders_px > 0.0:
+    if custom_spider_angles_deg is None and spiders > 0 and spiders_px > 0.0:
         if seed is None:
-            theta0 = torch.rand((), device=ideal_pupil.device) * (2.0 * torch.pi / spiders)
-        else:
-            generator_device = ideal_pupil.device.type if ideal_pupil.device.type == "cuda" else "cpu"
-            generator = torch.Generator(device=generator_device)
-            generator.manual_seed(int(seed))
-            theta0 = torch.rand((), device=ideal_pupil.device, generator=generator) * (
+            theta0 = torch.rand((), device=ideal_pupil.device) * (
                 2.0 * torch.pi / spiders
             )
+        else:
+            generator_device = (
+                ideal_pupil.device.type if ideal_pupil.device.type == "cuda" else "cpu"
+            )
+            generator = torch.Generator(device=generator_device)
+            generator.manual_seed(int(seed))
+            theta0 = torch.rand(
+                (), device=ideal_pupil.device, generator=generator
+            ) * (2.0 * torch.pi / spiders)
 
     telescope_mask = circular_pupil_telescope(
         n=n,
@@ -371,6 +515,12 @@ def build_wfs_propagation_pupil(
         spiders=spiders,
         spiders_px=spiders_px,
         central_obstruction_diam_px=central_obstruction_diam_px,
+        central_obstruction_offset_x_px=custom_obstruction_offset_x_px,
+        central_obstruction_offset_y_px=custom_obstruction_offset_y_px,
+        spider_angles_deg=custom_spider_angles_deg,
+        spider_origin_offset_x_px=custom_spider_origin_offset_x_px,
+        spider_origin_offset_y_px=custom_spider_origin_offset_y_px,
+        spider_bidirectional=custom_spider_bidirectional,
         theta0=theta0,
     )
     return ideal_pupil.clone() * telescope_mask
@@ -1478,7 +1628,71 @@ def _get_gif_frame_indices(n_frames: int, max_frames: int = 500) -> np.ndarray:
 
     return np.linspace(0, n_frames - 1, max_frames, dtype=np.int64)
 
+def save_transition_gif_with_colorbar(
+    tensor_all,
+    out_path,
+    cmap="viridis",
+    fps=15,
+    title_prefix="",
+    use_log=False,
+    symmetric=False,
+    max_frames=500,
+):
+    """
+    Guarda un GIF renderizando cada frame con matplotlib + colorbar.
+    Útil para mapas de fase/comando del DM.
 
+    tensor_all:
+        (T,1,H,W) o compatible tras squeeze.
+    symmetric:
+        Si True, usa rango [-max_abs, +max_abs], útil para comandos con signo.
+    """
+    gif_indices = _get_gif_frame_indices(int(tensor_all.shape[0]), max_frames=max_frames)
+
+    x = tensor_all[gif_indices].detach().cpu()
+
+    if use_log:
+        x = torch.log10(x.clamp_min(1e-12))
+
+    x = x.squeeze(1).numpy().astype(np.float32)
+
+    vmin = float(np.min(x))
+    vmax = float(np.max(x))
+
+    if symmetric:
+        vmax_abs = max(abs(vmin), abs(vmax))
+        vmin = -vmax_abs
+        vmax = +vmax_abs
+
+    frames = []
+
+    for i, frame_idx in enumerate(
+        tqdm(gif_indices, desc=f"Saving GIF with colorbar: {os.path.basename(out_path)}", leave=False)
+    ):
+        fig, ax = plt.subplots(figsize=(6.0, 5.2))
+        im = ax.imshow(x[i], cmap=cmap, vmin=vmin, vmax=vmax)
+        cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        cbar.ax.set_ylabel("Command value", rotation=90)
+
+        ax.set_title(f"{title_prefix} | sample {int(frame_idx)}")
+        ax.axis("off")
+        fig.tight_layout()
+
+        canvas = FigureCanvas(fig)
+        canvas.draw()
+        buf = np.asarray(canvas.buffer_rgba())[..., :3].copy()
+
+        frames.append(buf)
+        plt.close(fig)
+
+    frame_duration_ms = 1000.0 / float(fps)
+
+    imageio.mimsave(
+        out_path,
+        frames,
+        duration=frame_duration_ms,
+        loop=0,
+    )
 def save_transition_gif_fast(
     tensor_all,
     loop_closed_flag,
@@ -1734,6 +1948,22 @@ def save_network_input_4ch_gif(
 
     imageio.mimsave(out_path, frames, loop=0)
 
+def save_modal_history_heatmap(modal_all, out_path, cl_sample=0, Name="", title_suffix=""):
+    """
+    Guarda heatmap de una historia modal: (T, n_modes)
+    """
+    z = modal_all.detach().cpu().float().numpy()
+
+    plt.figure(figsize=(13, 6))
+    im = plt.imshow(z.T, aspect="auto", origin="lower", interpolation="nearest")
+    plt.axvline(cl_sample - 1, linestyle="--", linewidth=1.2, color="w", alpha=0.9, label="Loop closes")
+    plt.xlabel("Sample")
+    plt.ylabel("Mode / actuator index")
+    plt.title(f"{Name} | {title_suffix}")
+    plt.colorbar(im, fraction=0.046, pad=0.04, label="Coefficient value")
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=180, bbox_inches="tight")
+    plt.close()
 
 def save_z_estimation_heatmap(z_est_all, out_path, cl_sample=0, Name=""):
     """
@@ -1752,6 +1982,40 @@ def save_z_estimation_heatmap(z_est_all, out_path, cl_sample=0, Name=""):
     plt.ylabel("Estimated Zernike mode index")
     plt.title(f"{Name} | NN modal estimation")
     plt.colorbar(im, fraction=0.046, pad=0.04, label="Estimated coefficient")
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=180, bbox_inches="tight")
+    plt.close()
+
+def save_estimation_vs_control_plot(
+    z_est_all,
+    u_command_all,
+    out_path,
+    cl_sample=0,
+    Name="",
+):
+    """
+    Compara la magnitud de la estimación de la red y del control acumulado.
+
+    Se grafica el RMS modal por sample:
+        sqrt(mean(c_i^2))
+    """
+    z_est_all = z_est_all.detach().cpu().float()
+    u_command_all = u_command_all.detach().cpu().float()
+
+    z_est_rms = torch.sqrt(torch.mean(z_est_all**2, dim=1)).numpy()
+    u_cmd_rms = torch.sqrt(torch.mean(u_command_all**2, dim=1)).numpy()
+
+    x = np.arange(len(z_est_rms))
+
+    plt.figure(figsize=(12, 6))
+    plt.plot(x, z_est_rms, label="NN estimation RMS", linewidth=1.8)
+    plt.plot(x, u_cmd_rms, label="Accumulated control RMS", linewidth=1.8)
+    plt.axvline(cl_sample - 1, linestyle="--", linewidth=1.2, color="k", alpha=0.7, label="Loop closes")
+    plt.xlabel("Sample")
+    plt.ylabel("Modal RMS value")
+    plt.title(f"{Name} | Estimation vs accumulated control")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
     plt.tight_layout()
     plt.savefig(out_path, dpi=180, bbox_inches="tight")
     plt.close()
@@ -1859,27 +2123,113 @@ def build_frame_optical_pupil(
     return telescope_pupil * atmospheric_amplitude
 
 
-def build_forward_pipe(WFS, NN, noise_pipe, norm_type, noise_flag):
-    def forward_pipe(propagation_pupil=None, phi=None, return_net_input=False):
-        # IMPORTANTE: propagation_pupil afecta únicamente la formación de la
-        # imagen del WFS que ve la red. No se usa para métricas ni bases ideales.
-        I_full, I_crop = WFS.propagate(pupil=propagation_pupil, phi=phi, return_both=True)
 
-        if noise_flag:
-            I_full = noise_pipe(I_full)
-            I_crop = noise_pipe(I_crop)
+def save_wfs_crop_boxes_diagnostic(
+    I_full,
+    boxes,
+    out_path,
+    *,
+    cmap="hot",
+    title="WFS full frame + exact NN crops",
+):
+    """Save full WFS detector frame with exact crop_pyr bounding boxes."""
+    if boxes is None:
+        return
+
+    img = (
+        I_full.detach().cpu().squeeze().float().numpy()
+        if torch.is_tensor(I_full)
+        else np.asarray(I_full).squeeze()
+    )
+    boxes_np = np.asarray(boxes)
+    if boxes_np.ndim == 3:
+        boxes_np = boxes_np[0]
+    if boxes_np.ndim != 2 or boxes_np.shape[-1] != 4:
+        raise ValueError(f"Invalid boxes shape: {boxes_np.shape}")
+
+    fig, ax = plt.subplots(figsize=(7, 7))
+    im = ax.imshow(img, cmap=cmap)
+    for idx, (x0, y0, x1, y1) in enumerate(boxes_np):
+        ax.add_patch(
+            Rectangle(
+                (float(x0), float(y0)),
+                float(x1 - x0),
+                float(y1 - y0),
+                fill=False,
+                linewidth=1.5,
+            )
+        )
+        ax.text(float(x0), float(y0), f"P{idx + 1}", fontsize=8)
+    ax.set_title(title)
+    ax.set_axis_off()
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+
+
+def build_forward_pipe(WFS, NN, noise_pipe, norm_type, noise_flag):
+    """WFS -> detector/noise -> exact crops -> normalization -> NN."""
+    mode = str(camera_noise_domain).strip().lower()
+    if mode not in ("legacy_independent", "full_frame"):
+        raise ValueError(
+            "camera_noise_domain must be 'legacy_independent' or 'full_frame'"
+        )
+
+    def forward_pipe(
+        propagation_pupil=None,
+        phi=None,
+        return_net_input=False,
+        return_boxes=False,
+        infer_nn=True,
+    ):
+        boxes = None
+
+        if mode == "full_frame":
+            I_full = WFS.propagate(
+                pupil=propagation_pupil,
+                phi=phi,
+                no_crop=True,
+            )
+            if noise_flag:
+                I_full = noise_pipe(I_full)
+            if return_boxes:
+                I_crop, boxes = WFS.crop_pyr(I_full, return_boxes=True)
+            else:
+                I_crop = WFS.crop_pyr(I_full, return_boxes=False)
+        else:
+            if return_boxes:
+                I_full, I_crop, boxes = WFS.propagate(
+                    pupil=propagation_pupil,
+                    phi=phi,
+                    return_both=True,
+                    return_boxes=True,
+                )
+            else:
+                I_full, I_crop = WFS.propagate(
+                    pupil=propagation_pupil,
+                    phi=phi,
+                    return_both=True,
+                )
+            if noise_flag:
+                # Preserve historical RNG consumption order.
+                I_full = noise_pipe(I_full)
+                I_crop = noise_pipe(I_crop)
 
         I_full = norm_I(I_full, norm=norm_type)
         I_crop = norm_I(I_crop, norm=norm_type)
 
-        with torch.no_grad():
-            zEst = NN(I_crop).detach()
+        zEst = None
+        if infer_nn:
+            with torch.no_grad():
+                zEst = NN(I_crop).detach()
 
+        result = [None if zEst is None else zEst.cpu(), I_full.cpu()]
         if return_net_input:
-            # I_crop is exactly the normalized tensor entering the NN.
-            return zEst.cpu(), I_full.cpu(), I_crop.detach().cpu()
-
-        return zEst.cpu(), I_full.cpu()
+            result.append(I_crop.detach().cpu())
+        if return_boxes:
+            result.append(boxes)
+        return tuple(result)
 
     return forward_pipe
 
@@ -1992,10 +2342,11 @@ def run_closed_loop_single_model(
             telescope_pupil,
             amp_test,
         )
-        z_test, I_full_test, net_input_test = forward_pipe(
+        z_test, I_full_test, net_input_test, crop_boxes_test = forward_pipe(
             propagation_pupil=propagation_pupil_test,
             phi=phi_test,
             return_net_input=True,
+            return_boxes=True,
         )
 
     assert_network_output_matches_basis(z_test, model_basis, Name)
@@ -2005,6 +2356,34 @@ def run_closed_loop_single_model(
 
     save_network_input_flag = (net_input_test.ndim == 4 and net_input_test.shape[1] == 4)
     network_channel_order = get_four_channel_order_from_wfs(WFS) if save_network_input_flag else None
+
+    crop_boxes_first_frame = (
+        None if crop_boxes_test is None else torch.as_tensor(crop_boxes_test).cpu()
+    )
+
+    if save_artifacts:
+        save_single_image(
+            img=telescope_pupil,
+            out_path=os.path.join(output_model_test_path, "physical_pupil_used.png"),
+            cmap="gray",
+            title=f"{Name} | physical pupil | mode={physical_pupil_mode}",
+            use_log=False,
+            range_min_max=True,
+        )
+        if save_wfs_crop_boxes_diagnostic and crop_boxes_test is not None:
+            save_wfs_crop_boxes_diagnostic(
+                I_full=I_full_test,
+                boxes=crop_boxes_test,
+                out_path=os.path.join(
+                    output_model_test_path,
+                    "wfs_full_with_exact_network_crops.png",
+                ),
+                cmap=propagation_colormap,
+                title=(
+                    f"{Name} | exact crop boxes before resize "
+                    f"| noise_domain={camera_noise_domain}"
+                ),
+            )
 
     psf_transition_all = torch.empty((n_samples, 1, fovPx, fovPx), dtype=shared_precision.real)
     phi_transition_all = torch.empty((n_samples, 1, H, W), dtype=shared_precision.real)
@@ -2025,6 +2404,8 @@ def run_closed_loop_single_model(
     # Stores the NN modal estimation associated with the network input.
     # This can differ per model because each model can have its own n_modes.
     z_est_transition_all = torch.empty((n_samples, n_modes), dtype=shared_precision.real)
+    u_command_transition_all = torch.empty((n_samples, n_modes), dtype=shared_precision.real)
+    phi_cmd_transition_all = torch.empty((n_samples, 1, H, W), dtype=shared_precision.real)
 
     wfe_open   = torch.empty(n_samples, dtype=shared_precision.real)
     wfe_closed = torch.empty(n_samples, dtype=shared_precision.real)
@@ -2038,6 +2419,9 @@ def run_closed_loop_single_model(
 
     # PI integrator state in the same coordinates as this model's training basis.
     u_integral = torch.zeros((1, n_modes), dtype=shared_precision.real, device=device)
+    u_command_applied = torch.zeros((1, n_modes), dtype=shared_precision.real, device=device)
+    # Full physical command retained between frames (important when kp != 0).
+    u_command_applied = torch.zeros_like(u_integral)
 
     loop_pbar = tqdm(
         range(n_samples),
@@ -2102,6 +2486,15 @@ def run_closed_loop_single_model(
             I_current   = I_open
             z_current = z_open
             net_input_current = net_input_open
+            u_command_current = u_command_applied
+            phi_cmd_current = zernike_compose_torch(
+                zernike_phi_vector=u_command_current,
+                zComposeMat=zComposeMat,
+            )
+
+            u_command_to_store = u_command_current.detach().cpu().to(dtype=shared_precision.real)
+            phi_cmd_to_store = phi_cmd_current.detach().cpu().to(dtype=shared_precision.real)
+
 
             wfe_closed[n] = wfe_open[n]
             strehl_closed[n] = strehl_open[n]
@@ -2111,7 +2504,7 @@ def run_closed_loop_single_model(
             loop_closed_flag[n] = True
 
             # Current command applied to the system.
-            u_command_current = u_integral
+            u_command_current = u_command_applied
             phi_cmd_current = zernike_compose_torch(
                 zernike_phi_vector=u_command_current,
                 zComposeMat=zComposeMat,
@@ -2150,11 +2543,15 @@ def run_closed_loop_single_model(
                 u_integral = clamp_integrator(u_integral, integrator_limit)
 
             u_command_new = u_integral + loop_sign * kp * z_est
+            u_command_applied = u_command_new.detach()
 
             phi_cmd_new = zernike_compose_torch(
                 zernike_phi_vector=u_command_new,
                 zComposeMat=zComposeMat,
             )
+
+            u_command_to_store = u_command_new.detach().cpu().to(dtype=shared_precision.real)
+            phi_cmd_to_store = phi_cmd_new.detach().cpu().to(dtype=shared_precision.real)       
 
             phi_current = remove_piston(
                 (phi_atm + phi_cmd_new) * telescope_pupil,
@@ -2162,8 +2559,12 @@ def run_closed_loop_single_model(
             )
 
             psf_current = get_psf(telescope_pupil=frame_propagation_pupil, phi=phi_current, fovPx=fovPx)
-            _, I_current = forward_pipe(propagation_pupil=frame_propagation_pupil, phi=phi_current)
-
+            _, I_current = forward_pipe(
+                propagation_pupil=frame_propagation_pupil,
+                phi=phi_current,
+                infer_nn=False,
+            )
+            
             wfe_closed[n] = get_wfe_rms(phi_current.cpu(), telescope_pupil.cpu())[0]
             strehl_closed[n] = get_strehl_from_psf(psf_current, I_psf_ref_peak)[0]
 
@@ -2171,6 +2572,8 @@ def run_closed_loop_single_model(
         psf_transition_all[n] = psf_current.squeeze(0)
         I_transition_all[n]   = I_current.squeeze(0).cpu()
         z_est_transition_all[n] = z_current.squeeze(0).detach().cpu()
+        u_command_transition_all[n] = u_command_to_store.squeeze(0)
+        phi_cmd_transition_all[n] = phi_cmd_to_store.squeeze(0)
         if amplitude_transition_all is not None and atmospheric_amplitude is not None:
             amplitude_transition_all[n] = atmospheric_amplitude.squeeze(0).detach().cpu()
 
@@ -2197,6 +2600,8 @@ def run_closed_loop_single_model(
         "psf_integrated_closed_loop": psf_integrated_closed_loop,
         "psf_integrated_start": psf_integrated_start,
         "phi_transition_all": phi_transition_all,
+        "u_command_transition_all": u_command_transition_all,
+        "phi_cmd_transition_all": phi_cmd_transition_all,
         "I_transition_all": I_transition_all,
         "wfe_open": wfe_open,
         "wfe_closed": wfe_closed,
@@ -2208,6 +2613,7 @@ def run_closed_loop_single_model(
         "z_est_transition_all": z_est_transition_all,
         "network_input_transition_all": net_input_transition_all,
         "network_channel_order": network_channel_order,
+        "wfs_crop_boxes_first_frame": crop_boxes_first_frame,
         "atmospheric_amplitude_transition_all": amplitude_transition_all,
         "atmosphere_info": atmosphere_sequence.info,
         "atmosphere_sampled_r0": atmosphere_sequence.sampled_r0,
@@ -2224,6 +2630,17 @@ def run_closed_loop_single_model(
         "propagation_pupil": propagation_pupil.detach().cpu(),
         "propagation_pupil_config": {
             "enabled": bool(propagation_pupil_enabled),
+            "mode": physical_pupil_mode,
+            "custom_pupil_path": custom_pupil_path,
+            "custom_pupil_intersect_model_support": bool(custom_pupil_intersect_model_support),
+            "custom_pupil_normalize": bool(custom_pupil_normalize),
+            "obstruction_offset_x_px": float(custom_obstruction_offset_x_px),
+            "obstruction_offset_y_px": float(custom_obstruction_offset_y_px),
+            "spider_angles_deg": custom_spider_angles_deg,
+            "spider_origin_offset_x_px": custom_spider_origin_offset_x_px,
+            "spider_origin_offset_y_px": custom_spider_origin_offset_y_px,
+            "spider_bidirectional": bool(custom_spider_bidirectional),
+            "camera_noise_domain": camera_noise_domain,
             "central_obstruction_diam_px": float(propagation_obstruction_px),
             "spiders": int(propagation_spider_count),
             "spiders_px": float(propagation_spider_width_px),
@@ -2237,6 +2654,31 @@ def run_closed_loop_single_model(
     torch.save(results, os.path.join(output_model_test_path, "closed_loop_results.pt"))
 
     if save_artifacts:
+        save_transition_gif_with_colorbar(
+            tensor_all=phi_cmd_transition_all,
+            out_path=os.path.join(output_model_test_path, "dm_accumulated_command.gif"),
+            cmap=phase_colormap,
+            fps=15,
+            title_prefix=f"{Name} | accumulated control command",
+            use_log=False,
+            symmetric=True,
+        )
+
+        save_modal_history_heatmap(
+            modal_all=u_command_transition_all,
+            out_path=os.path.join(output_model_test_path, "accumulated_control_heatmap.png"),
+            cl_sample=cl_sample,
+            Name=f"{Name} | {model_basis.basis_kind} | n_modes={n_modes}",
+            title_suffix="Accumulated control command",
+        )
+
+        save_estimation_vs_control_plot(
+            z_est_all=z_est_transition_all,
+            u_command_all=u_command_transition_all,
+            out_path=os.path.join(output_model_test_path, "estimation_vs_control_plot.png"),
+            cl_sample=cl_sample,
+            Name=f"{Name} | {model_basis.basis_kind} | n_modes={n_modes}",
+        )
         save_transition_gif_fast(
             tensor_all=psf_transition_all,
             loop_closed_flag=loop_closed_flag,
@@ -2451,8 +2893,10 @@ def main():
                 "spiders_px": selected_propagation_spiders_px,
                 "soft_edge_px": propagation_soft_edge_px,
                 "seed": propagation_pupil_seed,
-                "used_only_in_WFS_propagate": True,
                 "used_everywhere": True,
+                "mode": physical_pupil_mode,
+                "custom_pupil_path": custom_pupil_path,
+                "camera_noise_domain": camera_noise_domain,
                 "basis_matrices_left_unchanged": True,
             },
         },
