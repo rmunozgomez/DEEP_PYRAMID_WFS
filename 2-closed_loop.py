@@ -82,7 +82,7 @@ psf_colormap = "hot"
 #
 # This closed-loop script uses batch_size=1 because it evaluates one common
 # evolving atmosphere shared by every model, exactly like the old script.
-r0 = 0.03
+r0 = 0.02
 fractional_r0   = [0.5, 0.3, 0.2]
 wind_direction  = [90, 240, 120]
 wind_speed      = [8.0, 10.0, 10.0]
@@ -153,6 +153,12 @@ MODELS_TO_TEST = [
         "basis_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/MODAL_BASIS/DEFORMABLE_MIRROR_BASIS/BAX370_MRS/ACTUATOR_BASIS_RES_128.pt",
         "stage": 0,
         "Name": "convNext_zscore_global",
+    },
+    {
+        "train_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/TRAIN/single/phiRes_128/nnRes_36/DM_BAX370_MRS/ACTUATOR/nModes_97/MODEL_ConvNeXtTiny/RAMA_zscore_global_source",
+        "basis_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/MODAL_BASIS/DEFORMABLE_MIRROR_BASIS/BAX370_MRS/ACTUATOR_BASIS_RES_128.pt",
+        "stage": 0,
+        "Name": "convNext_zscore_global_source",
     },
     
 ]
@@ -391,7 +397,11 @@ def build_wfs_propagation_pupil(
 #   Para I_crop normalmente C=4; para I_full puede ser C=1.
 # =========================================================
 
-ParamMode = Literal["per_batch", "per_sample", "per_sample"]
+ParamMode = Literal[
+    "per_batch",
+    "per_sample",
+    "per_channel",
+]
 ShotNoiseMode = Literal["poisson", "gaussian"]
 OutputMode = Literal["Mono8", "Mono12", "Mono16"]
 
@@ -458,19 +468,28 @@ def _adc_max_dn(mode: OutputMode) -> float:
     raise ValueError("output_mode debe ser 'Mono8', 'Mono12' o 'Mono16'")
 
 
-def _param_shape(x: torch.Tensor, mode: ParamMode) -> Tuple[int, int]:
+def _param_shape(
+    x: torch.Tensor,
+    mode: ParamMode,
+) -> Tuple[int, int]:
+
     x = ensure_4d(x)
+
     B, C, _, _ = x.shape
 
     if mode == "per_batch":
         return (1, 1)
+
     if mode == "per_sample":
         return (B, 1)
-    if mode == "per_sample":
+
+    if mode == "per_channel":
         return (B, C)
 
-    raise ValueError("parameter_mode debe ser 'per_batch', 'per_sample' o 'per_sample'")
-
+    raise ValueError(
+        "parameter_mode debe ser "
+        "'per_batch', 'per_sample' o 'per_channel'"
+    )
 
 def _broadcast_param(p: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
     if p.ndim != 2:
@@ -592,7 +611,12 @@ def auto_electrons_to_dn_no_saturation(
     max_dn = _adc_max_dn(output_mode)
     usable_max_dn = max_dn * headroom
 
-    e_max = x.amax(dim=(-2, -1), keepdim=True).clamp_min(min_gain_e_per_dn)
+    e_max = x.amax(
+        dim=(-3, -2, -1),
+        keepdim=True,
+    ).clamp_min(
+        min_gain_e_per_dn
+    )
     available_dn = (usable_max_dn - bias_dn).clamp_min(1.0)
 
     gain_e_per_dn = (e_max / available_dn).clamp_min(min_gain_e_per_dn)
