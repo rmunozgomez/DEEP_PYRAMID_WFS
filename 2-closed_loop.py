@@ -36,7 +36,7 @@ DEFAULT_DEVICE = "cuda:4"
 seed = 400
 
 # closed loop parameters
-n_samples = 200
+n_samples = 1000
 cl_sample = 100
 
 kp = 0.0
