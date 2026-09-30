@@ -286,17 +286,27 @@ class StageCfg:
 
 
 @dataclass(frozen=True)
-class ExperimentCfg:
-    source: SourceCfg = field(default_factory=SourceCfg)
-    telescope: TelescopeCfg = field(default_factory=TelescopeCfg)
-    wfs: WfsCfg = field(default_factory=WfsCfg)
-    model: ModelCfg = field(default_factory=ModelCfg)
-    stages: List[StageCfg] = field(default_factory=list)
+class StageCfg:
+    atmosphere: AtmosphereStageCfg
+    train: TrainStageCfg
+
+
 @dataclass(frozen=True)
 class RangeCfg:
     low: float
     high: float
     log: bool = False
+
+    def __post_init__(self) -> None:
+        if self.high < self.low:
+            raise ValueError(
+                f"Invalid range: [{self.low}, {self.high}]"
+            )
+
+        if self.log and self.low <= 0:
+            raise ValueError(
+                "Log-uniform ranges require low > 0."
+            )
 
 
 @dataclass(frozen=True)
@@ -336,11 +346,57 @@ class CameraNoiseCfg:
 
     seed_offset: int = 30_000_000
 
+    def __post_init__(self) -> None:
+        probabilities = (
+            self.p_low,
+            self.p_normal,
+            self.p_good,
+        )
+
+        if any(p < 0 for p in probabilities):
+            raise ValueError(
+                "Camera probabilities cannot be negative."
+            )
+
+        if sum(probabilities) <= 0:
+            raise ValueError(
+                "Camera probabilities must have a positive sum."
+            )
+
+        if self.parameter_mode not in (
+            "per_batch",
+            "per_sample",
+            "per_channel",
+        ):
+            raise ValueError(
+                f"Invalid parameter_mode: {self.parameter_mode}"
+            )
+
+        if self.shot_noise not in (
+            "poisson",
+            "gaussian",
+        ):
+            raise ValueError(
+                f"Invalid shot_noise: {self.shot_noise}"
+            )
+
+        if self.output_mode not in (
+            "Mono8",
+            "Mono12",
+            "Mono16",
+        ):
+            raise ValueError(
+                f"Invalid output_mode: {self.output_mode}"
+            )
+
+
 @dataclass(frozen=True)
 class ExperimentCfg:
     source: SourceCfg = field(default_factory=SourceCfg)
     telescope: TelescopeCfg = field(default_factory=TelescopeCfg)
     wfs: WfsCfg = field(default_factory=WfsCfg)
     model: ModelCfg = field(default_factory=ModelCfg)
-    camera: CameraNoiseCfg = ...
+
+    camera: Optional[CameraNoiseCfg] = None
+
     stages: List[StageCfg] = field(default_factory=list)

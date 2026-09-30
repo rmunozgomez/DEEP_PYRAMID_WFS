@@ -14,9 +14,12 @@ import os
 from . import config_parameters as P
 from .config_schema import (
     AtmosphereStageCfg,
+    CameraNoiseCfg,
+    CameraNoiseDomainCfg,
     CoefLossCfg,
     ExperimentCfg,
     ModelCfg,
+    RangeCfg,
     SourceCfg,
     StageCfg,
     TelescopeCfg,
@@ -48,6 +51,30 @@ def _pair(value: Sequence[Any], name: str) -> Tuple[float, float]:
         raise ValueError(f"{name} has max < min: {value}.")
     return low, high
 
+def _range_cfg(
+    value: Sequence[Any],
+    name: str,
+) -> RangeCfg:
+
+    if len(value) != 3:
+        raise ValueError(
+            f"{name} must contain (low, high, log)."
+        )
+
+    low = float(value[0])
+    high = float(value[1])
+    log = bool(value[2])
+
+    if high < low:
+        raise ValueError(
+            f"{name} has max < min: {value}."
+        )
+
+    return RangeCfg(
+        low=low,
+        high=high,
+        log=log,
+    )
 
 def _infer_num_stages() -> int:
     # The number of stages remains defined by EPOCHS.
@@ -329,6 +356,122 @@ def _build_stages() -> List[StageCfg]:
 
     return stages
 
+def _build_camera_cfg() -> CameraNoiseCfg:
+
+    return CameraNoiseCfg(
+        low=CameraNoiseDomainCfg(
+            peak_e=_range_cfg(
+                P.CAMERA_LOW_PEAK_E,
+                "CAMERA_LOW_PEAK_E",
+            ),
+            bg_e=_range_cfg(
+                P.CAMERA_LOW_BG_E,
+                "CAMERA_LOW_BG_E",
+            ),
+            read_sigma_e=_range_cfg(
+                P.CAMERA_LOW_READ_SIGMA_E,
+                "CAMERA_LOW_READ_SIGMA_E",
+            ),
+            bias_dn=_range_cfg(
+                P.CAMERA_LOW_BIAS_DN,
+                "CAMERA_LOW_BIAS_DN",
+            ),
+        ),
+
+        normal=CameraNoiseDomainCfg(
+            peak_e=_range_cfg(
+                P.CAMERA_NORMAL_PEAK_E,
+                "CAMERA_NORMAL_PEAK_E",
+            ),
+            bg_e=_range_cfg(
+                P.CAMERA_NORMAL_BG_E,
+                "CAMERA_NORMAL_BG_E",
+            ),
+            read_sigma_e=_range_cfg(
+                P.CAMERA_NORMAL_READ_SIGMA_E,
+                "CAMERA_NORMAL_READ_SIGMA_E",
+            ),
+            bias_dn=_range_cfg(
+                P.CAMERA_NORMAL_BIAS_DN,
+                "CAMERA_NORMAL_BIAS_DN",
+            ),
+        ),
+
+        good=CameraNoiseDomainCfg(
+            peak_e=_range_cfg(
+                P.CAMERA_GOOD_PEAK_E,
+                "CAMERA_GOOD_PEAK_E",
+            ),
+            bg_e=_range_cfg(
+                P.CAMERA_GOOD_BG_E,
+                "CAMERA_GOOD_BG_E",
+            ),
+            read_sigma_e=_range_cfg(
+                P.CAMERA_GOOD_READ_SIGMA_E,
+                "CAMERA_GOOD_READ_SIGMA_E",
+            ),
+            bias_dn=_range_cfg(
+                P.CAMERA_GOOD_BIAS_DN,
+                "CAMERA_GOOD_BIAS_DN",
+            ),
+        ),
+
+        p_low=float(P.CAMERA_P_LOW),
+        p_normal=float(P.CAMERA_P_NORMAL),
+        p_good=float(P.CAMERA_P_GOOD),
+
+        parameter_mode=str(
+            P.CAMERA_PARAMETER_MODE
+        ),
+
+        shot_noise=str(
+            P.CAMERA_SHOT_NOISE
+        ),
+
+        output_mode=str(
+            P.CAMERA_OUTPUT_MODE
+        ),
+
+        mono16_align=str(
+            P.CAMERA_MONO16_ALIGN
+        ),
+
+        use_ste_adc=bool(
+            P.CAMERA_USE_STE_ADC
+        ),
+
+        auto_gain=bool(
+            P.CAMERA_AUTO_GAIN
+        ),
+
+        adc_headroom=float(
+            P.CAMERA_ADC_HEADROOM
+        ),
+
+        min_gain_e_per_dn=float(
+            P.CAMERA_MIN_GAIN_E_PER_DN
+        ),
+
+        add_prnu=bool(
+            P.CAMERA_ADD_PRNU
+        ),
+
+        prnu_sigma=float(
+            P.CAMERA_PRNU_SIGMA
+        ),
+
+        add_dsnu=bool(
+            P.CAMERA_ADD_DSNU
+        ),
+
+        dsnu_sigma_e=float(
+            P.CAMERA_DSNU_SIGMA_E
+        ),
+
+        seed_offset=int(
+            P.CAMERA_SEED_OFFSET
+        ),
+    )
 
 def get_config() -> ExperimentCfg:
     return ExperimentCfg(
@@ -391,6 +534,9 @@ def get_config() -> ExperimentCfg:
             weights=P.WTS,
             resolution=int(P.NN_RESOLUTION),
         ),
+
+        camera=_build_camera_cfg(),
+
         stages=_build_stages(),
     )
 
@@ -428,6 +574,7 @@ def save_run_info(
         handle.write(f"telescope: {cfg.telescope}\n")
         handle.write(f"wfs: {cfg.wfs}\n")
         handle.write(f"model: {cfg.model}\n")
+        handle.write(f"camera: {cfg.camera}\n")
 
         handle.write("\n=== CONFIG (STAGES) ===\n")
         for index, stage in enumerate(cfg.stages, start=1):

@@ -880,6 +880,7 @@ def _run_open_closed_loop_batch(
     telescope_pupil: torch.Tensor,
     train_cfg,
     noise_pipe,
+    camera_seed_offset: int,
     device: str,
 ):
     """Process one already generated online atmosphere batch.
@@ -889,6 +890,15 @@ def _run_open_closed_loop_batch(
     frame is produced only with ``atmosphere.update()``.
     """
     _seed_global_torch(realization_seed, device)
+
+    if (
+        train_cfg.noise
+        and noise_pipe.generator is not None
+    ):
+        noise_pipe.generator.manual_seed(
+            int(realization_seed)
+            + int(camera_seed_offset)
+        )
 
     # -------------------------------------------------
     # STEP 0: OPEN LOOP — use the existing frame zero
@@ -1521,6 +1531,7 @@ def main() -> None:
             "telescope_cfg": asdict(cfg.telescope),
             "wfs_cfg": asdict(cfg.wfs),
             "model_cfg": asdict(cfg.model),
+            "camera_cfg": asdict(cfg.camera),
             "stages_cfg": [
                 asdict(stage) for stage in cfg.stages
             ],
@@ -1929,6 +1940,7 @@ def main() -> None:
                     coef_loss=coef_loss,
                     zComposeMat=zComposeMat,
                     telescope_pupil=telescope_pupil,
+                    camera_seed_offset=camera_cfg.seed_offset,
                     train_cfg=train_cfg,
                     noise_pipe=noise_pipe,
                     device=device,
@@ -2057,6 +2069,7 @@ def main() -> None:
                         coef_loss=coef_loss,
                         zComposeMat=zComposeMat,
                         telescope_pupil=telescope_pupil,
+                        camera_seed_offset=camera_cfg.seed_offset,
                         train_cfg=train_cfg,
                         noise_pipe=noise_pipe,
                         device=device,
