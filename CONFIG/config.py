@@ -170,6 +170,11 @@ def _build_stages() -> List[StageCfg]:
             n,
             "ATMOSPHERE_R0_SAMPLING",
         ),
+        "layer_sampling": _broadcast(
+            P.ATMOSPHERE_LAYER_SAMPLING,
+            n,
+            "ATMOSPHERE_LAYER_SAMPLING",
+),
     }
 
     training_values = {
@@ -278,6 +283,11 @@ def _build_stages() -> List[StageCfg]:
             r0_sampling=str(
                 atmosphere_values[
                 "r0_sampling"
+                ][index]
+            ),
+            layer_sampling=str(
+                atmosphere_values[
+                    "layer_sampling"
                 ][index]
             ),
         )

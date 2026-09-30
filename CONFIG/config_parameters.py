@@ -91,8 +91,30 @@ ATMOSPHERE_l0 = [1e-10]
 # The number of entries determines the number of atmospheric layers.
 ATMOSPHERE_FRACTIONAL_R0 = [[0.5, 0.3, 0.2]]
 
-# Each range is divided into N contiguous intervals, one per layer.
-# One random value is sampled inside each interval for every online batch.
+# Atmospheric layer sampling strategy.
+#
+# "altitude_stratified":
+#     Recommended for training.
+#
+#     altitude:
+#         One random layer is generated inside each vertical
+#         altitude interval.
+#
+#     wind speed:
+#         Each layer samples independently over the complete
+#         configured wind-speed range.
+#
+#     wind direction:
+#         Each layer samples independently over the complete
+#         angular range.
+#
+# "legacy_stratified":
+#     Previous behaviour. Altitude, wind speed and direction
+#     are all stratified according to layer index.
+ATMOSPHERE_LAYER_SAMPLING = [
+    "altitude_stratified"
+]
+
 ATMOSPHERE_WIND_SPEED_RANGE = [[0.0, 15.0]]
 ATMOSPHERE_WIND_DIRECTION_RANGE = [[0.0, 360.0]]
 ATMOSPHERE_ALTITUDE_RANGE = [[0.0, 10000]]

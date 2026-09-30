@@ -29,6 +29,7 @@ DeltaMode = Literal["final", "per_step"]
 FrozenFlowMode = Literal["analytic", "periodic_screen"]
 AsmExtraPixels = Union[int, Literal["auto"], None]
 R0SamplingMode = Literal["uniform_r0","uniform_dr0"]
+LayerSamplingMode = Literal["altitude_stratified", "legacy_stratified",]
 
 
 @dataclass(frozen=True)
@@ -147,10 +148,13 @@ class ModelCfg:
 class AtmosphereStageCfg:
     dr0_range: Tuple[float, float] = (10.0, 100.0)
     n_samples: int = 10_000
+
     l0: float = 1e-10
     n_modes: int = 68
     L0: float = 25.0
+    
     r0_sampling: R0SamplingMode = "uniform_dr0"
+    layer_sampling: LayerSamplingMode = "altitude_stratified"
 
     dm_basis: bool = False
     dm_basis_type: str = "ACTUATOR"
@@ -221,6 +225,22 @@ class AtmosphereStageCfg:
         ):
             if interval[1] < interval[0]:
                 raise ValueError(f"{name} has max < min: {interval}")
+
+        if self.r0_sampling not in (
+            "uniform_r0",
+            "uniform_dr0",
+        ):
+            raise ValueError(
+                f"Invalid r0_sampling: {self.r0_sampling}"
+            )
+        
+        if self.layer_sampling not in (
+            "altitude_stratified",
+            "legacy_stratified",
+        ):
+            raise ValueError(
+                f"Invalid layer_sampling: {self.layer_sampling}"
+            )
 
 
 @dataclass(frozen=True)

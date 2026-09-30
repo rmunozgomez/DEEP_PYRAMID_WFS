@@ -557,6 +557,43 @@ def _sample_stratified_layer_values(
 
     return tuple(values)
 
+def _sample_independent_layer_values(
+    interval: Tuple[float, float],
+    n_layers: int,
+    generator: torch.Generator,
+) -> Tuple[float, ...]:
+    """
+    Sample one independent value per atmospheric layer
+    over the complete interval.
+
+    Unlike the stratified sampler, the layer index does not
+    constrain the portion of the interval that can be sampled.
+    """
+
+    if n_layers <= 0:
+        raise ValueError(
+            "n_layers must be positive."
+        )
+
+    low, high = map(
+        float,
+        interval,
+    )
+
+    if high < low:
+        raise ValueError(
+            f"Invalid interval [{low}, {high}]."
+        )
+
+    return tuple(
+        _uniform_scalar(
+            generator,
+            low,
+            high,
+        )
+        for _ in range(n_layers)
+    )
+
 
 def _sample_atmosphere_profile(
     *,
@@ -573,7 +610,7 @@ def _sample_atmosphere_profile(
     # The interval is converted to its equivalent r0 endpoints here.
     # The actual sampling distribution is controlled explicitly by
     # atmosphere_cfg.r0_sampling inside Atmosphere.
-    # realization when gen() is called. Wind/altitude/direction remain shared
+    # Wind/altitude/direction remain shared
     # inside the batch and are sampled only once here for the next batch.
     dr0_min, dr0_max = map(float, atmosphere_cfg.dr0_range)
     r0 = (
@@ -586,21 +623,79 @@ def _sample_atmosphere_profile(
     )
     n_layers = len(fractional_r0)
 
-    wind_speed = _sample_stratified_layer_values(
-        atmosphere_cfg.wind_speed_range,
-        n_layers,
-        generator,
-    )
-    wind_direction = _sample_stratified_layer_values(
-        atmosphere_cfg.wind_direction_range,
-        n_layers,
-        generator,
-    )
-    altitude = _sample_stratified_layer_values(
-        atmosphere_cfg.altitude_range,
-        n_layers,
-        generator,
-    )
+    layer_sampling = str(
+        atmosphere_cfg.layer_sampling
+    ).lower()
+
+    if layer_sampling == "altitude_stratified":
+
+        # ---------------------------------------------------------
+        # ALTITUDE
+        # ---------------------------------------------------------
+        #
+        # Preserve vertical coverage:
+        #
+        #   layer 0 -> low atmosphere
+        #   layer 1 -> middle atmosphere
+        #   layer 2 -> high atmosphere
+        #
+        # fractional_r0 remains associated with these layers.
+        altitude = _sample_stratified_layer_values(
+            atmosphere_cfg.altitude_range,
+            n_layers,
+            generator,
+        )
+
+        # ---------------------------------------------------------
+        # WIND SPEED
+        # ---------------------------------------------------------
+        #
+        # Wind speed is independent of altitude. Every layer can
+        # sample the complete configured physical range.
+        wind_speed = _sample_independent_layer_values(
+            atmosphere_cfg.wind_speed_range,
+            n_layers,
+            generator,
+        )
+
+        # ---------------------------------------------------------
+        # WIND DIRECTION
+        # ---------------------------------------------------------
+        #
+        # Wind direction is also independent of altitude and
+        # independent between atmospheric layers.
+        wind_direction = _sample_independent_layer_values(
+            atmosphere_cfg.wind_direction_range,
+            n_layers,
+            generator,
+        )
+
+    elif layer_sampling == "legacy_stratified":
+
+        # Historical behaviour retained for reproducibility.
+        wind_speed = _sample_stratified_layer_values(
+            atmosphere_cfg.wind_speed_range,
+            n_layers,
+            generator,
+        )
+
+        wind_direction = _sample_stratified_layer_values(
+            atmosphere_cfg.wind_direction_range,
+            n_layers,
+            generator,
+        )
+
+        altitude = _sample_stratified_layer_values(
+            atmosphere_cfg.altitude_range,
+            n_layers,
+            generator,
+        )
+
+    else:
+        raise ValueError(
+            "Unknown atmosphere layer sampling mode: "
+            f"{atmosphere_cfg.layer_sampling!r}"
+        )
 
     return AtmosphereBatchProfile(
         dr0_range=(dr0_min, dr0_max),
