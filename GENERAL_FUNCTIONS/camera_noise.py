@@ -757,26 +757,53 @@ class CameraNoiseAugmenter:
         x = clamp_nonneg(x, 0.0)
 
         # ----------------------------------------------------
-        # 1) Elegir régimen de señal y muestrear parámetros
+        # 1) Reutilizar estado fijo de esta secuencia
         # ----------------------------------------------------
-        signal_mode, domain = _choose_signal_domain(
-            self.cfg,
-            x,
-            self.generator,
+        if (
+            self._signal_mode is None
+            or self._sequence_params is None
+            or self._sequence_shape is None
+        ):
+            raise RuntimeError(
+                "CameraNoiseAugmenter.start_sequence(reference) "
+                "must be called before applying camera noise."
+            )
+
+        current_shape = tuple(
+            int(value)
+            for value in x.shape
         )
 
-        params = _sample_domain_params(
-            domain,
+        if current_shape != self._sequence_shape:
+            raise RuntimeError(
+                "Camera input shape changed inside the same "
+                "camera sequence: "
+                f"expected {self._sequence_shape}, "
+                f"got {current_shape}."
+            )
+
+        signal_mode = self._signal_mode
+        params = self._sequence_params
+
+        peak_e = _broadcast_param(
+            params["peak_e"],
             x,
-            parameter_mode=self.cfg.parameter_mode,
-            generator=self.generator,
         )
 
-        peak_e = _broadcast_param(params["peak_e"], x)
-        bg_e = _broadcast_param(params["bg_e"], x)
-        read_sigma_e = _broadcast_param(params["read_sigma_e"], x)
-        bias_dn = _broadcast_param(params["bias_dn"], x)
+        bg_e = _broadcast_param(
+            params["bg_e"],
+            x,
+        )
 
+        read_sigma_e = _broadcast_param(
+            params["read_sigma_e"],
+            x,
+        )
+
+        bias_dn = _broadcast_param(
+            params["bias_dn"],
+            x,
+        )
         # ----------------------------------------------------
         # 2) Intensidad arbitraria -> electrones esperados
         # ----------------------------------------------------
