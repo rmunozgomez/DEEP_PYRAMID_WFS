@@ -385,11 +385,9 @@ class CameraNoiseCfg:
 
 @dataclass(frozen=True)
 class ExperimentCfg:
+    camera: CameraNoiseCfg
     source: SourceCfg = field(default_factory=SourceCfg)
     telescope: TelescopeCfg = field(default_factory=TelescopeCfg)
     wfs: WfsCfg = field(default_factory=WfsCfg)
     model: ModelCfg = field(default_factory=ModelCfg)
-
-    camera: Optional[CameraNoiseCfg] = None
-
     stages: List[StageCfg] = field(default_factory=list)
