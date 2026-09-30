@@ -88,7 +88,7 @@ ATMOSPHERE_R0_SAMPLING = [
 ATMOSPHERE_L0 = [25.0]
 ATMOSPHERE_l0 = [1e-10]
 
-# The number of entries determines the number of atmospheric layers.
+# fractional_r0 entries are associated from low to high altitude.
 ATMOSPHERE_FRACTIONAL_R0 = [[0.5, 0.3, 0.2]]
 
 # Atmospheric layer sampling strategy.
