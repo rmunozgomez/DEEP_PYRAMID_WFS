@@ -915,8 +915,19 @@ def _run_open_closed_loop_batch(
         pupil=effective_pupil0,
         return_boxes=True,
     )
+
     if train_cfg.noise:
-        intensity = noise_pipe(intensity)
+
+        # A new physical camera fixed-pattern realization
+        # is generated once for this entire open/closed-loop
+        # sequence.
+        noise_pipe.start_sequence(
+            intensity
+        )
+
+        intensity = noise_pipe(
+            intensity
+        )      
     intensity = norm_I(intensity, train_cfg.norm_type)
 
     prediction = NN(intensity)

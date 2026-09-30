@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Dict, Any, List, Tuple, Optional, Union, Literal
 
 import torch
@@ -618,6 +618,85 @@ class CameraNoiseAugmenter:
     cfg: CameraNoiseAugmentConfig
     generator: Optional[torch.Generator] = None
 
+    _prnu_map: Optional[Tensor] = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+
+    _dsnu_map: Optional[Tensor] = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+
+    def start_sequence(
+        self,
+        reference: Tensor,
+    ) -> None:
+        """
+        Generate the fixed-pattern maps for one camera sequence.
+
+        PRNU and DSNU remain constant for all frames belonging
+        to the same open/closed-loop realization.
+
+        A new call generates a new virtual camera realization.
+        """
+        x = ensure_4d(reference)
+
+        _, channels, height, width = x.shape
+
+        map_shape = (
+            1,
+            channels,
+            height,
+            width,
+        )
+
+        # --------------------------------------------------
+        # PRNU: fixed multiplicative pixel response
+        # --------------------------------------------------
+        if (
+            self.cfg.add_prnu
+            and self.cfg.prnu_sigma > 0
+        ):
+            prnu_noise = torch.randn(
+                map_shape,
+                device=x.device,
+                dtype=x.dtype,
+                generator=self.generator,
+            )
+
+            self._prnu_map = (
+                1.0
+                + self.cfg.prnu_sigma * prnu_noise
+            ).clamp_min(0.0)
+
+        else:
+            self._prnu_map = None
+
+        # --------------------------------------------------
+        # DSNU: fixed additive pixel offset [electrons]
+        # --------------------------------------------------
+        if (
+            self.cfg.add_dsnu
+            and self.cfg.dsnu_sigma_e > 0
+        ):
+            dsnu_noise = torch.randn(
+                map_shape,
+                device=x.device,
+                dtype=x.dtype,
+                generator=self.generator,
+            )
+
+            self._dsnu_map = (
+                self.cfg.dsnu_sigma_e
+                * dsnu_noise
+            )
+
+        else:
+            self._dsnu_map = None
+
     def __call__(self, I_unit: Tensor):
         """
         I_unit:
@@ -661,14 +740,13 @@ class CameraNoiseAugmenter:
         lam_e = to_expected_electrons_from_unit(x, peak_e=peak_e)
 
         # ----------------------------------------------------
-        # 3) PRNU opcional
+        # 3) PRNU fijo durante la secuencia
         # ----------------------------------------------------
-        if self.cfg.add_prnu and self.cfg.prnu_sigma > 0:
-            prnu = 1.0 + self.cfg.prnu_sigma * randn_like_compat(
+        if self._prnu_map is not None:
+            lam_e = apply_prnu_multiplicative(
                 lam_e,
-                self.generator,
+                self._prnu_map,
             )
-            lam_e = lam_e * prnu.clamp_min(0.0)
 
         # ----------------------------------------------------
         # 4) Background / dark
@@ -696,14 +774,13 @@ class CameraNoiseAugmenter:
             )
 
         # ----------------------------------------------------
-        # 6) DSNU opcional
+        # 6) DSNU fijo durante la secuencia
         # ----------------------------------------------------
-        if self.cfg.add_dsnu and self.cfg.dsnu_sigma_e > 0:
-            dsnu = self.cfg.dsnu_sigma_e * randn_like_compat(
+        if self._dsnu_map is not None:
+            e = apply_dsnu_additive(
                 e,
-                self.generator,
+                self._dsnu_map,
             )
-            e = e + dsnu
 
         # ----------------------------------------------------
         # 7) Readout noise
