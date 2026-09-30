@@ -612,6 +612,40 @@ def auto_electrons_to_dn_no_saturation(
 
     return dn_analog, gain_e_per_dn
 
+def electrons_to_dn_fixed_gain(
+    e: Tensor,
+    bias_dn: Tensor,
+    gain_e_per_dn: Tensor,
+) -> Tensor:
+    """
+    Convert electrons to DN using a gain fixed for the
+    entire camera sequence.
+
+    Parameters
+    ----------
+    e:
+        Measured electrons, shape (B,C,H,W).
+
+    bias_dn:
+        Digital bias, broadcastable to (B,C,H,W).
+
+    gain_e_per_dn:
+        Fixed conversion gain [e-/DN], broadcastable to
+        (B,C,H,W).
+    """
+    x = ensure_4d(e)
+
+    gain = gain_e_per_dn.to(
+        device=x.device,
+        dtype=x.dtype,
+    ).clamp_min(1e-12)
+
+    bias = bias_dn.to(
+        device=x.device,
+        dtype=x.dtype,
+    )
+
+    return x / gain + bias
 
 @dataclass
 class CameraNoiseAugmenter:
@@ -643,6 +677,11 @@ class CameraNoiseAugmenter:
     )
 
     _sequence_shape: Optional[Tuple[int, int, int, int]] = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+    _gain_e_per_dn: Optional[Tensor] = field(
         default=None,
         init=False,
         repr=False,
@@ -739,6 +778,61 @@ class CameraNoiseAugmenter:
             parameter_mode=self.cfg.parameter_mode,
             generator=self.generator,
         )
+
+        # --------------------------------------------------
+        # Fixed conversion gain for the whole sequence
+        # --------------------------------------------------
+        peak_e = _broadcast_param(
+            self._sequence_params["peak_e"],
+            x,
+        )
+
+        bg_e = _broadcast_param(
+            self._sequence_params["bg_e"],
+            x,
+        )
+
+        bias_dn = _broadcast_param(
+            self._sequence_params["bias_dn"],
+            x,
+        )
+
+        # Clean expected electron image for the
+        # reference frame.
+        lam_reference = to_expected_electrons_from_unit(
+            x,
+            peak_e=peak_e,
+        )
+
+        # Apply the same fixed detector PRNU that will be
+        # used during the sequence.
+        if self._prnu_map is not None:
+            lam_reference = apply_prnu_multiplicative(
+                lam_reference,
+                self._prnu_map,
+            )
+
+        # Add the fixed operating background.
+        lam_reference = add_background_e(
+            lam_reference,
+            bg_e=bg_e,
+        )
+
+        if self.cfg.auto_gain:
+            _, gain_e_per_dn = auto_electrons_to_dn_no_saturation(
+                lam_reference,
+                bias_dn=bias_dn,
+                output_mode=self.cfg.output_mode,
+                headroom=self.cfg.adc_headroom,
+                min_gain_e_per_dn=self.cfg.min_gain_e_per_dn,
+            )
+
+            self._gain_e_per_dn = gain_e_per_dn
+
+        else:
+            raise NotImplementedError(
+                "Fixed manual gain is not implemented yet."
+            )
 
     def __call__(self, I_unit: Tensor):
         """
@@ -865,21 +959,21 @@ class CameraNoiseAugmenter:
         e = e.clamp_min(0.0)
 
         # ----------------------------------------------------
-        # 8) Electron -> DN con auto-gain para no saturar
+        # 8) Electron -> DN using sequence-fixed gain
         # ----------------------------------------------------
-        if self.cfg.auto_gain:
-            dn, gain_e_per_dn = auto_electrons_to_dn_no_saturation(
-                e,
-                bias_dn=bias_dn,
-                output_mode=self.cfg.output_mode,
-                headroom=self.cfg.adc_headroom,
-                min_gain_e_per_dn=self.cfg.min_gain_e_per_dn,
+        if self._gain_e_per_dn is None:
+            raise RuntimeError(
+                "Camera gain is not initialized. "
+                "Call start_sequence(reference) first."
             )
-        else:
-            raise NotImplementedError(
-                "En esta versión se usa auto_gain=True para asegurar que "
-                "la imagen siempre cabe dentro del rango ADC."
-            )
+
+        gain_e_per_dn = self._gain_e_per_dn
+
+        dn = electrons_to_dn_fixed_gain(
+            e,
+            bias_dn=bias_dn,
+            gain_e_per_dn=gain_e_per_dn,
+        )
 
         # ----------------------------------------------------
         # 9) Cuantización ADC, siempre activa
