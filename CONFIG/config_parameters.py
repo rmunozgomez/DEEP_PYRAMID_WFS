@@ -151,6 +151,48 @@ DM_BASIS = True
 DM_BASIS_TYPE = "ACTUATOR"  # "ACTUATOR" | "ZERNIKE"
 DM_NAME = "BAX370_MRS"
 
+# ============================================================
+# CAMERA NOISE
+# ============================================================
+
+CAMERA_LOW_PEAK_E = (30.0, 150.0, True)
+CAMERA_LOW_BG_E = (0.5, 5.0, True)
+CAMERA_LOW_READ_SIGMA_E = (1.5, 3.5, False)
+CAMERA_LOW_BIAS_DN = (0.0, 3.0, False)
+
+CAMERA_NORMAL_PEAK_E = (150.0, 1500.0, True)
+CAMERA_NORMAL_BG_E = (0.2, 3.0, True)
+CAMERA_NORMAL_READ_SIGMA_E = (0.8, 2.0, False)
+CAMERA_NORMAL_BIAS_DN = (0.0, 3.0, False)
+
+CAMERA_GOOD_PEAK_E = (1500.0, 7000.0, True)
+CAMERA_GOOD_BG_E = (0.05, 1.0, True)
+CAMERA_GOOD_READ_SIGMA_E = (0.5, 1.2, False)
+CAMERA_GOOD_BIAS_DN = (0.0, 3.0, False)
+
+CAMERA_P_LOW = 0.30
+CAMERA_P_NORMAL = 0.55
+CAMERA_P_GOOD = 0.15
+
+CAMERA_PARAMETER_MODE = "per_sample"
+CAMERA_SHOT_NOISE = "poisson"
+
+CAMERA_OUTPUT_MODE = "Mono8"
+CAMERA_MONO16_ALIGN = "lsb"
+CAMERA_USE_STE_ADC = False
+
+CAMERA_AUTO_GAIN = True
+CAMERA_ADC_HEADROOM = 0.90
+CAMERA_MIN_GAIN_E_PER_DN = 1e-6
+
+CAMERA_ADD_PRNU = True
+CAMERA_PRNU_SIGMA = 0.005
+
+CAMERA_ADD_DSNU = True
+CAMERA_DSNU_SIGMA_E = 0.2
+
+CAMERA_SEED_OFFSET = 30_000_000
+
 
 # ============================================================
 # TRAINING — PER STAGE

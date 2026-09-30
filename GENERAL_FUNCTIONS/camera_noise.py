@@ -161,13 +161,23 @@ def apply_dsnu_additive(x: Tensor, dsnu_map: Tensor) -> Tensor:
 # ============================================================
 # E) Shot noise (REAL vs DIFF)
 # ============================================================
-def shot_noise_poisson(lam_e: Tensor) -> Tensor:
+def shot_noise_poisson(
+    lam_e: Tensor,
+    generator: Optional[torch.Generator] = None,
+) -> Tensor:
     """
     REAL: Poisson(λ). No diferenciable.
+
+    El generator permite controlar explícitamente
+    la secuencia aleatoria del ruido de cámara.
     """
     x = ensure_4d(lam_e)
     x = clamp_nonneg(x, 0.0)
-    return torch.poisson(x)
+
+    return torch.poisson(
+        x,
+        generator=generator,
+    )
 
 
 def shot_noise_gaussian_approx(
@@ -669,14 +679,21 @@ class CameraNoiseAugmenter:
         # 5) Shot noise
         # ----------------------------------------------------
         if self.cfg.shot_noise == "poisson":
-            e = shot_noise_poisson(lam_e)
+            e = shot_noise_poisson(
+                lam_e,
+                generator=self.generator,
+            )
+
         elif self.cfg.shot_noise == "gaussian":
             e = shot_noise_gaussian_approx(
                 lam_e,
                 generator=self.generator,
             )
+
         else:
-            raise ValueError("shot_noise debe ser 'poisson' o 'gaussian'")
+            raise ValueError(
+                "shot_noise debe ser 'poisson' o 'gaussian'"
+            )
 
         # ----------------------------------------------------
         # 6) DSNU opcional

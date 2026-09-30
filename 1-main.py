@@ -1130,6 +1130,69 @@ def _as_4d_pupil(
 
     return pupil.contiguous()
 
+def _build_camera_noise(
+    camera_cfg,
+    *,
+    device: str,
+) -> CameraNoiseAugmenter:
+
+    def make_range(cfg):
+        return Range(
+            cfg.low,
+            cfg.high,
+            log=cfg.log,
+        )
+
+    def make_domain(cfg):
+        return CameraNoiseDomain(
+            peak_e=make_range(cfg.peak_e),
+            bg_e=make_range(cfg.bg_e),
+            read_sigma_e=make_range(
+                cfg.read_sigma_e
+            ),
+            bias_dn=make_range(cfg.bias_dn),
+        )
+
+    augmenter_cfg = CameraNoiseAugmentConfig(
+        low=make_domain(camera_cfg.low),
+        normal=make_domain(camera_cfg.normal),
+        good=make_domain(camera_cfg.good),
+
+        p_low=camera_cfg.p_low,
+        p_normal=camera_cfg.p_normal,
+        p_good=camera_cfg.p_good,
+
+        parameter_mode=camera_cfg.parameter_mode,
+        shot_noise=camera_cfg.shot_noise,
+
+        output_mode=camera_cfg.output_mode,
+        mono16_align=camera_cfg.mono16_align,
+        use_ste_adc=camera_cfg.use_ste_adc,
+
+        auto_gain=camera_cfg.auto_gain,
+        adc_headroom=camera_cfg.adc_headroom,
+        min_gain_e_per_dn=(
+            camera_cfg.min_gain_e_per_dn
+        ),
+
+        add_prnu=camera_cfg.add_prnu,
+        prnu_sigma=camera_cfg.prnu_sigma,
+
+        add_dsnu=camera_cfg.add_dsnu,
+        dsnu_sigma_e=camera_cfg.dsnu_sigma_e,
+
+        return_metadata=False,
+    )
+
+    generator = torch.Generator(
+        device=torch.device(device)
+    )
+
+    return CameraNoiseAugmenter(
+        augmenter_cfg,
+        generator=generator,
+    )
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Online atmospheric training"
@@ -1365,43 +1428,12 @@ def main() -> None:
     # ============================================================
     # CAMERA NOISE
     # ============================================================
-    camera_noise_cfg = CameraNoiseAugmentConfig(
-        low=CameraNoiseDomain(
-            peak_e=Range(30.0, 150.0, log=True),
-            bg_e=Range(0.5, 5.0, log=True),
-            read_sigma_e=Range(1.5, 3.5),
-            bias_dn=Range(0.0, 3.0),
-        ),
-        normal=CameraNoiseDomain(
-            peak_e=Range(150.0, 1500.0, log=True),
-            bg_e=Range(0.2, 3.0, log=True),
-            read_sigma_e=Range(0.8, 2.0),
-            bias_dn=Range(0.0, 3.0),
-        ),
-        good=CameraNoiseDomain(
-            peak_e=Range(1500.0, 7000.0, log=True),
-            bg_e=Range(0.05, 1.0, log=True),
-            read_sigma_e=Range(0.5, 1.2),
-            bias_dn=Range(0.0, 3.0),
-        ),
-        p_low=0.30,
-        p_normal=0.55,
-        p_good=0.15,
-        parameter_mode="per_sample",
-        shot_noise="poisson",
-        output_mode="Mono8",
-        mono16_align="lsb",
-        use_ste_adc=False,
-        auto_gain=True,
-        adc_headroom=0.90,
-        min_gain_e_per_dn=1e-6,
-        add_prnu=True,
-        prnu_sigma=0.005,
-        add_dsnu=True,
-        dsnu_sigma_e=0.2,
-        return_metadata=False,
+    camera_cfg = cfg.camera
+
+    noise_pipe = _build_camera_noise(
+        camera_cfg,
+        device=device,
     )
-    noise_pipe = CameraNoiseAugmenter(camera_noise_cfg)
 
     # ============================================================
     # MODEL

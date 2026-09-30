@@ -292,3 +292,55 @@ class ExperimentCfg:
     wfs: WfsCfg = field(default_factory=WfsCfg)
     model: ModelCfg = field(default_factory=ModelCfg)
     stages: List[StageCfg] = field(default_factory=list)
+@dataclass(frozen=True)
+class RangeCfg:
+    low: float
+    high: float
+    log: bool = False
+
+
+@dataclass(frozen=True)
+class CameraNoiseDomainCfg:
+    peak_e: RangeCfg
+    bg_e: RangeCfg
+    read_sigma_e: RangeCfg
+    bias_dn: RangeCfg
+
+
+@dataclass(frozen=True)
+class CameraNoiseCfg:
+    low: CameraNoiseDomainCfg
+    normal: CameraNoiseDomainCfg
+    good: CameraNoiseDomainCfg
+
+    p_low: float = 0.30
+    p_normal: float = 0.55
+    p_good: float = 0.15
+
+    parameter_mode: str = "per_sample"
+    shot_noise: str = "poisson"
+
+    output_mode: str = "Mono8"
+    mono16_align: str = "lsb"
+    use_ste_adc: bool = False
+
+    auto_gain: bool = True
+    adc_headroom: float = 0.90
+    min_gain_e_per_dn: float = 1e-6
+
+    add_prnu: bool = True
+    prnu_sigma: float = 0.005
+
+    add_dsnu: bool = True
+    dsnu_sigma_e: float = 0.2
+
+    seed_offset: int = 30_000_000
+
+@dataclass(frozen=True)
+class ExperimentCfg:
+    source: SourceCfg = field(default_factory=SourceCfg)
+    telescope: TelescopeCfg = field(default_factory=TelescopeCfg)
+    wfs: WfsCfg = field(default_factory=WfsCfg)
+    model: ModelCfg = field(default_factory=ModelCfg)
+    camera: CameraNoiseCfg = ...
+    stages: List[StageCfg] = field(default_factory=list)
