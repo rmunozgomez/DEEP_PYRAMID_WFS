@@ -630,6 +630,24 @@ class CameraNoiseAugmenter:
         repr=False,
     )
 
+    _signal_mode: Optional[str] = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+
+    _sequence_params: Optional[Dict[str, Tensor]] = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+
+    _sequence_shape: Optional[Tuple[int, int, int, int]] = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+
     def start_sequence(
         self,
         reference: Tensor,
@@ -643,6 +661,11 @@ class CameraNoiseAugmenter:
         A new call generates a new virtual camera realization.
         """
         x = ensure_4d(reference)
+        
+        self._sequence_shape = tuple(
+            int(value)
+            for value in x.shape
+        )
 
         _, channels, height, width = x.shape
 
@@ -696,6 +719,26 @@ class CameraNoiseAugmenter:
 
         else:
             self._dsnu_map = None
+        # --------------------------------------------------
+        # Camera operating regime
+        # --------------------------------------------------
+        signal_mode, domain = _choose_signal_domain(
+            self.cfg,
+            x,
+            self.generator,
+        )
+
+        self._signal_mode = signal_mode
+
+        # --------------------------------------------------
+        # Camera parameters fixed during this sequence
+        # --------------------------------------------------
+        self._sequence_params = _sample_domain_params(
+            domain,
+            x,
+            parameter_mode=self.cfg.parameter_mode,
+            generator=self.generator,
+        )
 
     def __call__(self, I_unit: Tensor):
         """
