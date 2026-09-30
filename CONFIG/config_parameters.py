@@ -74,6 +74,17 @@ ATMOSPHERE_SAMPLES = [100000]
 
 # D/r0 is sampled uniformly inside this interval, then r0 = D / (D/r0).
 ATMOSPHERE_DR0_RANGE = [[5.0, 40.0]]
+# Distribution used to generate atmospheric strength.
+#
+# "uniform_dr0":
+#     D/r0 ~ Uniform(dr0_min, dr0_max)
+#     Recommended for the current training definition.
+#
+# "uniform_r0":
+#     r0 ~ Uniform(r0_min, r0_max)
+ATMOSPHERE_R0_SAMPLING = [
+    "uniform_dr0"
+]
 ATMOSPHERE_L0 = [25.0]
 ATMOSPHERE_l0 = [1e-10]
 

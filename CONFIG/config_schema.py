@@ -28,6 +28,7 @@ PropagationMode = Literal["geometric", "asm_delta"]
 DeltaMode = Literal["final", "per_step"]
 FrozenFlowMode = Literal["analytic", "periodic_screen"]
 AsmExtraPixels = Union[int, Literal["auto"], None]
+R0SamplingMode = Literal["uniform_r0","uniform_dr0"]
 
 
 @dataclass(frozen=True)
@@ -149,6 +150,7 @@ class AtmosphereStageCfg:
     l0: float = 1e-10
     n_modes: int = 68
     L0: float = 25.0
+    r0_sampling: R0SamplingMode = "uniform_dr0"
 
     dm_basis: bool = False
     dm_basis_type: str = "ACTUATOR"

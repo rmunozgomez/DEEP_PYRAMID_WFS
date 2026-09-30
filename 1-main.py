@@ -568,8 +568,11 @@ def _sample_atmosphere_profile(
     generator = torch.Generator(device="cpu")
     generator.manual_seed(int(seed))
 
-    # Keep the old dataset distribution exactly: r0 itself is sampled
-    # uniformly. Atmosphere receives [r0_min, r0_max] and draws one value per
+    # dr0_range defines the allowed atmospheric-strength interval.
+    #
+    # The interval is converted to its equivalent r0 endpoints here.
+    # The actual sampling distribution is controlled explicitly by
+    # atmosphere_cfg.r0_sampling inside Atmosphere.
     # realization when gen() is called. Wind/altitude/direction remain shared
     # inside the batch and are sampled only once here for the next batch.
     dr0_min, dr0_max = map(float, atmosphere_cfg.dr0_range)
@@ -726,6 +729,7 @@ def _build_atmosphere(
         telescope_diameter=telescope_cfg.diameter,
         frame_rate=atmosphere_cfg.frame_rate,
         r0=initial_profile.r0,
+        r0_sampling=atmosphere_cfg.r0_sampling,
         L0=atmosphere_cfg.L0,
         l0=atmosphere_cfg.l0,
         wind_speed=tuple(reversed(initial_profile.wind_speed)),

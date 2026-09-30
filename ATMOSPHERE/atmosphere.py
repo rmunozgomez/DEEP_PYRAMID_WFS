@@ -15,6 +15,7 @@ PropagationMode = Literal["geometric", "asm_delta"]
 DeltaMode = Literal["final", "per_step"]
 SubharmonicMode = Literal["oopao", "full"]
 FrozenFlowMode = Literal["analytic", "periodic_screen"]
+R0SamplingMode = Literal["uniform_r0","uniform_dr0"]
 
 # VERIFIED INIT ARGUMENT: Atmosphere.__init__ includes delta_mode.
 
@@ -189,6 +190,7 @@ class Atmosphere(nn.Module):
         delta_wrap_warning_threshold: float = 1.9 * math.pi,
         temporal_reanchor_interval: int = 256,
         frozen_flow_mode: FrozenFlowMode = "analytic",
+        r0_sampling: R0SamplingMode = "uniform_r0",
     ) -> None:
         super().__init__()
 
@@ -260,6 +262,16 @@ class Atmosphere(nn.Module):
             if dtype == torch.float32
             else torch.complex128
         )
+
+        self.r0_sampling = r0_sampling
+        if self.r0_sampling not in (
+            "uniform_r0",
+            "uniform_dr0",
+        ):
+            raise ValueError(
+                "r0_sampling must be "
+                "'uniform_r0' or 'uniform_dr0'."
+            )
 
         requested_device = torch.device(device)
         if requested_device.type == "cuda" and not torch.cuda.is_available():
@@ -531,15 +543,67 @@ class Atmosphere(nn.Module):
         return "range", low, high, reference
 
     def _sample_r0_batch(self) -> None:
-        """Populate ``r0_batch`` for the next newly generated realization."""
+        """
+        Sample one Fried parameter per realization.
+
+        Modes
+        -----
+        fixed:
+            All realizations use the same r0.
+
+        uniform_r0:
+            r0 ~ U(r0_min, r0_max)
+
+        uniform_dr0:
+            D/r0 ~ U(D/r0_max, D/r0_min)
+            and then r0 = D / (D/r0).
+        """
+
         if self.r0_mode == "fixed":
             self.r0_batch.fill_(self.r0_min)
             return
 
-        self.r0_batch.uniform_(
-            self.r0_min,
-            self.r0_max,
-            generator=self.generator,
+        if self.r0_sampling == "uniform_r0":
+
+            self.r0_batch.uniform_(
+                self.r0_min,
+                self.r0_max,
+                generator=self.generator,
+            )
+
+            return
+
+        if self.r0_sampling == "uniform_dr0":
+
+            dr0_min = (
+                self.telescope_diameter
+                / self.r0_max
+            )
+
+            dr0_max = (
+                self.telescope_diameter
+                / self.r0_min
+            )
+
+            dr0_batch = torch.empty_like(
+                self.r0_batch
+            )
+
+            dr0_batch.uniform_(
+                dr0_min,
+                dr0_max,
+                generator=self.generator,
+            )
+
+            self.r0_batch.copy_(
+                self.telescope_diameter
+                / dr0_batch
+            )
+
+            return
+
+        raise RuntimeError(
+            f"Unknown r0_sampling={self.r0_sampling!r}"
         )
 
     def _validate_scalar_parameters(self) -> None:
@@ -1518,6 +1582,13 @@ class Atmosphere(nn.Module):
         if self.frozen_flow_mode == "periodic_screen":
             self._sh_spectrum_t = self._sh_spectrum_0 * hi_factor[None, :, :, :]
 
+    @property
+    def dr0_batch(self) -> torch.Tensor:
+        return (
+            self.telescope_diameter
+            / self.r0_batch
+        )
+
     @torch.no_grad()
     def update(
         self,
@@ -1761,6 +1832,8 @@ class Atmosphere(nn.Module):
                 3 if self.subharmonic_mode == "oopao" else 8
             ),
             "frozen_flow_mode": self.frozen_flow_mode,
+            "r0_sampling" : self.r0_sampling,
+            "dr0_batch" : (self.dr0_batch.detach().cpu())
         }
 
 

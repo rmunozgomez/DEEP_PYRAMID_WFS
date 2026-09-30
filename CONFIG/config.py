@@ -165,6 +165,11 @@ def _build_stages() -> List[StageCfg]:
             n,
             "ATMOSPHERE_TEMPORAL_REANCHOR_INTERVAL",
         ),
+        "r0_sampling": _broadcast(
+            P.ATMOSPHERE_R0_SAMPLING,
+            n,
+            "ATMOSPHERE_R0_SAMPLING",
+        ),
     }
 
     training_values = {
@@ -269,6 +274,11 @@ def _build_stages() -> List[StageCfg]:
             ),
             temporal_reanchor_interval=int(
                 atmosphere_values["reanchor"][index]
+            ),
+            r0_sampling=str(
+                atmosphere_values[
+                "r0_sampling"
+                ][index]
             ),
         )
 
