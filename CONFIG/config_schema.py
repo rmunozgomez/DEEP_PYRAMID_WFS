@@ -284,13 +284,6 @@ class StageCfg:
     atmosphere: AtmosphereStageCfg
     train: TrainStageCfg
 
-
-@dataclass(frozen=True)
-class StageCfg:
-    atmosphere: AtmosphereStageCfg
-    train: TrainStageCfg
-
-
 @dataclass(frozen=True)
 class RangeCfg:
     low: float
