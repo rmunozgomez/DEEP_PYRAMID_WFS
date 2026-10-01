@@ -1561,7 +1561,7 @@ def main() -> None:
     # EXPERIMENT DIRECTORY
     # ============================================================
     experiment_path = Path(
-        f"./TRAIN/{stages_cfg[0].train.precision}/"
+        f"./TRAIN/{runtime_cfg.precision}/"
         f"phiRes_{telescope_cfg.resolution}/"
         f"nnRes_{model_cfg.resolution}/"
         f"DM_{dm_name}/"
