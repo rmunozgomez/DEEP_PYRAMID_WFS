@@ -748,7 +748,12 @@ def _prepare_atmosphere_frame(
     phase: torch.Tensor,
     telescope_pupil: torch.Tensor,
     scintillation: bool,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    active_batch_size: int | None = None,
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+]:
     """Prepare phase, atmospheric amplitude and effective WFS pupil.
 
     The atmospheric complex field is
@@ -765,16 +770,54 @@ def _prepare_atmosphere_frame(
         phase,
         name="phase",
     )
+    full_batch_size = int(
+        phase_batch.shape[0]
+    )
+
+    if active_batch_size is None:
+
+        active_batch_size = (
+            full_batch_size
+        )
+
+    else:
+
+        active_batch_size = int(
+            active_batch_size
+        )
+
+        if not (
+            1
+            <= active_batch_size
+            <= full_batch_size
+        ):
+            raise ValueError(
+                "active_batch_size must satisfy "
+                f"1 <= active_batch_size <= {full_batch_size}. "
+                f"Received {active_batch_size}."
+            )
+
+    phase_batch = phase_batch[
+        :active_batch_size
+    ]
     phase_batch = phase_batch * telescope_pupil
 
     if scintillation:
+
         amplitude = _atmosphere_to_network_batch(
             atmosphere.field.abs(),
             name="amplitude",
         )
-    else:
-        amplitude = torch.ones_like(phase_batch)
 
+        amplitude = amplitude[
+            :active_batch_size
+        ]
+
+    else:
+
+        amplitude = torch.ones_like(
+            phase_batch
+        )
     effective_pupil = telescope_pupil * amplitude
 
     return phase_batch, amplitude, effective_pupil
@@ -787,24 +830,134 @@ def _seed_global_torch(seed: int, device: str) -> None:
         torch.cuda.manual_seed_all(int(seed))
 
 
-def _online_batch_counts(
+def _online_batch_plan(
     *,
     n_samples: int,
     train_fraction: float,
     batch_size: int,
-) -> Tuple[int, int, int, int]:
-    """Return train/val batch counts and actual generated sample counts."""
-    train_target = max(1, int(round(n_samples * train_fraction)))
-    val_target = max(1, n_samples - train_target)
+) -> Tuple[
+    Tuple[int, ...],
+    Tuple[int, ...],
+    int,
+    int,
+]:
+    """
+    Build exact train/validation batch sizes.
 
-    train_batches = max(1, math.ceil(train_target / batch_size))
-    val_batches = max(1, math.ceil(val_target / batch_size))
+    n_samples is the exact total number of samples used
+    during one epoch:
+
+        train_samples + val_samples == n_samples
+
+    The final batch of each split can be smaller than
+    batch_size, equivalent to DataLoader(drop_last=False).
+    """
+
+    n_samples = int(n_samples)
+    batch_size = int(batch_size)
+    train_fraction = float(train_fraction)
+
+    if n_samples < 2:
+        raise ValueError(
+            "n_samples must be >= 2."
+        )
+
+    if batch_size <= 0:
+        raise ValueError(
+            "batch_size must be positive."
+        )
+
+    if not 0.0 < train_fraction < 1.0:
+        raise ValueError(
+            "train_fraction must lie strictly "
+            "between 0 and 1."
+        )
+
+    # Preserve the previous round-based split, but clamp
+    # it so both train and validation contain >= 1 sample.
+    train_samples = int(
+        round(
+            n_samples
+            * train_fraction
+        )
+    )
+
+    train_samples = min(
+        max(
+            train_samples,
+            1,
+        ),
+        n_samples - 1,
+    )
+
+    val_samples = (
+        n_samples
+        - train_samples
+    )
+
+    def make_batch_sizes(
+        target_samples: int,
+    ) -> Tuple[int, ...]:
+
+        full_batches, remainder = divmod(
+            target_samples,
+            batch_size,
+        )
+
+        sizes = (
+            (batch_size,)
+            * full_batches
+        )
+
+        if remainder > 0:
+            sizes = (
+                sizes
+                + (remainder,)
+            )
+
+        if not sizes:
+            raise RuntimeError(
+                "Internal error: empty batch plan."
+            )
+
+        return sizes
+
+    train_batch_sizes = make_batch_sizes(
+        train_samples
+    )
+
+    val_batch_sizes = make_batch_sizes(
+        val_samples
+    )
+
+    # Safety check: this is the contract of this function.
+    if sum(train_batch_sizes) != train_samples:
+        raise RuntimeError(
+            "Train batch plan does not match "
+            "the requested sample count."
+        )
+
+    if sum(val_batch_sizes) != val_samples:
+        raise RuntimeError(
+            "Validation batch plan does not match "
+            "the requested sample count."
+        )
+
+    if (
+        train_samples
+        + val_samples
+        != n_samples
+    ):
+        raise RuntimeError(
+            "Train/validation split does not "
+            "sum to n_samples."
+        )
 
     return (
-        train_batches,
-        val_batches,
-        train_batches * batch_size,
-        val_batches * batch_size,
+        train_batch_sizes,
+        val_batch_sizes,
+        train_samples,
+        val_samples,
     )
 
 
@@ -881,6 +1034,7 @@ def _run_open_closed_loop_batch(
     train_cfg,
     noise_pipe,
     camera_seed_offset: int,
+    active_batch_size: int,
     collect_debug: bool = False,
     device: str,
 ):
@@ -890,6 +1044,22 @@ def _run_open_closed_loop_batch(
     This function uses that returned phase directly. Every later atmospheric
     frame is produced only with ``atmosphere.update()``.
     """
+
+    active_batch_size = int(
+        active_batch_size
+    )
+
+    if not (
+        1
+        <= active_batch_size
+        <= atmosphere.batch_size
+    ):
+        raise ValueError(
+            "active_batch_size must satisfy "
+            f"1 <= size <= {atmosphere.batch_size}. "
+            f"Received {active_batch_size}."
+        )
+
     _seed_global_torch(realization_seed, device)
 
     if (
@@ -909,6 +1079,7 @@ def _run_open_closed_loop_batch(
         phase=initial_phase,
         telescope_pupil=telescope_pupil,
         scintillation=scintillation,
+        active_batch_size=active_batch_size,
     )
 
     if collect_debug:
@@ -1005,6 +1176,7 @@ def _run_open_closed_loop_batch(
                 phase=atmosphere.update(),
                 telescope_pupil=telescope_pupil,
                 scintillation=scintillation,
+                active_batch_size=active_batch_size,
             )
 
             phi_correction = zernike_compose_torch(
@@ -1830,14 +2002,22 @@ def main() -> None:
 
         
         (
-            train_batches,
-            val_batches,
-            actual_train_samples,
-            actual_val_samples,
-        ) = _online_batch_counts(
+            train_batch_sizes,
+            val_batch_sizes,
+            train_samples,
+            val_samples,
+        ) = _online_batch_plan(
             n_samples=atmosphere_cfg.n_samples,
             train_fraction=train_cfg.train_frac,
             batch_size=train_cfg.batch_size,
+        )
+
+        train_batches = len(
+            train_batch_sizes
+        )
+
+        val_batches = len(
+            val_batch_sizes
         )
 
         initial_seed = (
@@ -2023,9 +2203,13 @@ def main() -> None:
 
         print(
             f"Stage {stage_idx}: online generation | "
+            f"train samples={train_samples}, "
+            f"val samples={val_samples}, "
             f"train batches={train_batches}, "
             f"val batches={val_batches}, "
-            f"batch={train_cfg.batch_size}, "
+            f"batch max={train_cfg.batch_size}, "
+            f"train last batch={train_batch_sizes[-1]}, "
+            f"val last batch={val_batch_sizes[-1]}, "
             f"layers={atmosphere_cfg.n_layers}, "
             f"scintillation={atmosphere_cfg.scintillation}"
         )
@@ -2041,7 +2225,7 @@ def main() -> None:
             running_last_std = 0.0
 
             progress = tqdm(
-                range(train_batches),
+                train_batch_sizes,
                 desc=(
                     f"[stage {stage_idx}] "
                     f"train epoch {epoch + 1}/{epochs}"
@@ -2049,7 +2233,11 @@ def main() -> None:
                 leave=False,
             )
 
-            for batch_idx in progress:
+            processed_samples = 0
+
+            for batch_idx, current_batch_size in enumerate(
+                progress
+            ):
                 batch_seed = (
                     atmosphere_cfg.seed
                     + stage_idx * 100_000_000
@@ -2083,6 +2271,7 @@ def main() -> None:
                     camera_seed_offset=camera_cfg.seed_offset,
                     train_cfg=train_cfg,
                     noise_pipe=noise_pipe,
+                    active_batch_size=current_batch_size,
                     collect_debug=False,
                     device=device,
                 )
@@ -2093,32 +2282,55 @@ def main() -> None:
                 total_loss.backward()
                 optimizer.step()
 
-                running_loss += float(
-                    total_loss.detach().cpu()
+                batch_weight = int(
+                    current_batch_size
                 )
-                running_open_std += step_logs[0][
-                    "std_spatial"
-                ]
-                running_last_std += step_logs[-1][
-                    "std_spatial"
-                ]
 
-                completed = batch_idx + 1
+                running_loss += (
+                    float(
+                        total_loss.detach().cpu()
+                    )
+                    * batch_weight
+                )
+
+                running_open_std += (
+                    float(
+                        step_logs[0][
+                            "std_spatial"
+                        ]
+                    )
+                    * batch_weight
+                )
+
+                running_last_std += (
+                    float(
+                        step_logs[-1][
+                            "std_spatial"
+                        ]
+                    )
+                    * batch_weight
+                )
+
+                processed_samples += batch_weight
+                
                 dr0_batch = (
                     telescope_cfg.diameter / atmosphere.r0_batch
                 )
                 std0 = (
                     running_open_std
-                    / completed
+                    / processed_samples
                 )
 
                 std_last = (
                     running_last_std
-                    / completed
+                    / processed_samples
                 )
 
                 progress.set_postfix(
-                    loss=running_loss / completed,
+                    loss=(
+                        running_loss
+                        / processed_samples
+                    ),
 
                     std0=std0,
                     std_last=std_last,
@@ -2142,14 +2354,26 @@ def main() -> None:
                     ),
                 )
 
+            if processed_samples != train_samples:
+                raise RuntimeError(
+                    "Processed training sample count "
+                    f"({processed_samples}) does not match "
+                    f"the planned count ({train_samples})."
+                )
+
             train_loss_epoch = (
-                running_loss / train_batches
+                running_loss
+                / train_samples
             )
+
             train_open_std_epoch = (
-                running_open_std / train_batches
+                running_open_std
+                / train_samples
             )
+
             train_last_std_epoch = (
-                running_last_std / train_batches
+                running_last_std
+                / train_samples
             )
 
             train_loss_history.append(train_loss_epoch)
@@ -2170,7 +2394,7 @@ def main() -> None:
             running_last_std = 0.0
 
             progress = tqdm(
-                range(val_batches),
+                val_batch_sizes,
                 desc=(
                     f"[stage {stage_idx}] "
                     f"val epoch {epoch + 1}/{epochs}"
@@ -2178,8 +2402,13 @@ def main() -> None:
                 leave=False,
             )
 
+            processed_samples = 0
+
             with torch.no_grad():
-                for batch_idx in progress:
+
+                for batch_idx, current_batch_size in enumerate(
+                    progress
+                ):
                     # No epoch term: validation is regenerated, but exactly
                     # the same profiles/realizations are used every epoch.
                     batch_seed = (
@@ -2216,6 +2445,7 @@ def main() -> None:
                         train_cfg=train_cfg,
                         noise_pipe=noise_pipe,
                         collect_debug=collect_debug,
+                        active_batch_size=current_batch_size,
                         device=device,
                     )
 
@@ -2223,32 +2453,60 @@ def main() -> None:
                     step_logs = output["step_logs"]
 
 
-                    running_loss += float(
-                        total_loss.detach().cpu()
+                    batch_weight = int(
+                        current_batch_size
                     )
-                    running_open_std += step_logs[0][
-                        "std_spatial"
-                    ]
-                    running_last_std += step_logs[-1][
-                        "std_spatial"
-                    ]
 
-                    completed = batch_idx + 1
-                    dr0_batch = (
-                        telescope_cfg.diameter / atmosphere.r0_batch
+                    running_loss += (
+                        float(
+                            total_loss.detach().cpu()
+                        )
+                        * batch_weight
                     )
+
+                    running_open_std += (
+                        float(
+                            step_logs[0][
+                                "std_spatial"
+                            ]
+                        )
+                        * batch_weight
+                    )
+
+                    running_last_std += (
+                        float(
+                            step_logs[-1][
+                                "std_spatial"
+                            ]
+                        )
+                        * batch_weight
+                    )
+
+                    processed_samples += batch_weight
+
+                    # Only the active realizations belong to this batch.
+                    dr0_batch = (
+                        telescope_cfg.diameter
+                        / atmosphere.r0_batch[
+                            :current_batch_size
+                        ]
+                    )
+
                     std0 = (
                         running_open_std
-                        / completed
+                        / processed_samples
                     )
 
                     std_last = (
                         running_last_std
-                        / completed
+                        / processed_samples
                     )
 
                     progress.set_postfix(
-                        loss=running_loss / completed,
+                        loss=(
+                            running_loss
+                            / processed_samples
+                        ),
 
                         std0=std0,
                         std_last=std_last,
@@ -2326,12 +2584,26 @@ def main() -> None:
                             "profile":
                                 asdict(profile),
                         }
-            val_loss_epoch = running_loss / val_batches
-            val_open_std_epoch = (
-                running_open_std / val_batches
+            if processed_samples != val_samples:
+                raise RuntimeError(
+                    "Processed validation sample count "
+                    f"({processed_samples}) does not match "
+                    f"the planned count ({val_samples})."
+                )
+
+            val_loss_epoch = (
+                running_loss
+                / val_samples
             )
+
+            val_open_std_epoch = (
+                running_open_std
+                / val_samples
+            )
+
             val_last_std_epoch = (
-                running_last_std / val_batches
+                running_last_std
+                / val_samples
             )
 
             val_loss_history.append(val_loss_epoch)
@@ -2386,10 +2658,23 @@ def main() -> None:
                     "train_batches_per_epoch": train_batches,
                     "val_batches_per_epoch": val_batches,
                     "actual_train_samples_per_epoch": (
-                        actual_train_samples
+                        train_samples
                     ),
+
                     "actual_val_samples_per_epoch": (
-                        actual_val_samples
+                        val_samples
+                    ),
+
+                    "train_batch_sizes": tuple(
+                        train_batch_sizes
+                    ),
+
+                    "val_batch_sizes": tuple(
+                        val_batch_sizes
+                    ),
+
+                    "requested_total_samples": (
+                        atmosphere_cfg.n_samples
                     ),
                     "online_generation": True,
                     "validation_is_deterministic": True,

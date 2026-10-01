@@ -297,8 +297,12 @@ class AtmosphereStageCfg:
         dr0_low, dr0_high = self.dr0_range
         if dr0_low <= 0 or dr0_high < dr0_low:
             raise ValueError(f"Invalid dr0_range: {self.dr0_range}")
-        if self.n_samples <= 0:
-            raise ValueError("n_samples must be positive.")
+        if self.n_samples < 2:
+            raise ValueError(
+                "n_samples must be >= 2 because "
+                "both training and validation require "
+                "at least one sample."
+            )
         if self.l0 <= 0 or self.L0 <= 0:
             raise ValueError("l0 and L0 must be positive.")
         if not self.fractional_r0:
