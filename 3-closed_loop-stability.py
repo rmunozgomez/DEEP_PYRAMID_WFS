@@ -3323,38 +3323,27 @@ def _build_streaming_atmosphere(
 
 def build_stability_forward_pipe(WFS, NN, noise_pipe, norm_type, noise_flag):
     """Minimal streaming WFS -> camera -> crop -> NN path."""
-    mode = str(camera_noise_domain).strip().lower()
-    if mode not in ("legacy_independent", "full_frame"):
-        raise ValueError(
-            "camera_noise_domain must be 'legacy_independent' or 'full_frame'"
+    def forward_pipe(propagation_pupil=None, phi=None):
+        _, I_crop = WFS.propagate(
+            pupil=propagation_pupil,
+            phi=phi,
+            return_both=True,
         )
 
-    def forward_pipe(propagation_pupil=None, phi=None):
-        if mode == "full_frame":
-            I_full = WFS.propagate(
-                pupil=propagation_pupil,
-                phi=phi,
-                no_crop=True,
+        if noise_flag:
+            I_crop = noise_pipe(
+                I_crop
             )
-            if noise_flag:
-                I_full = noise_pipe(I_full)
-            I_crop = WFS.crop_pyr(I_full, return_boxes=False)
-            I_crop = norm_I(I_crop, norm=norm_type)
-        else:
-            I_full, I_crop = WFS.propagate(
-                pupil=propagation_pupil,
-                phi=phi,
-                return_both=True,
-            )
-            if noise_flag:
-                I_full = noise_pipe(I_full)
-                I_crop = noise_pipe(I_crop)
-            I_full = norm_I(I_full, norm=norm_type)
-            I_crop = norm_I(I_crop, norm=norm_type)
+
+        I_crop = norm_I(
+            I_crop,
+            norm=norm_type,
+        )
 
         with torch.no_grad():
-            return NN(I_crop).detach()
-
+            return NN(
+                I_crop
+            ).detach()
     return forward_pipe
 
 

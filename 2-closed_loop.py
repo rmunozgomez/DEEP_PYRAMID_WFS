@@ -2739,12 +2739,6 @@ def save_wfs_crop_boxes_diagnostic(
 
 def build_forward_pipe(WFS, NN, noise_pipe, norm_type, noise_flag):
     """WFS -> detector/noise -> exact crops -> normalization -> NN."""
-    mode = str(camera_noise_domain).strip().lower()
-    if mode not in ("legacy_independent", "full_frame"):
-        raise ValueError(
-            "camera_noise_domain must be 'legacy_independent' or 'full_frame'"
-        )
-
     def forward_pipe(
         propagation_pupil=None,
         phi=None,
@@ -2754,36 +2748,27 @@ def build_forward_pipe(WFS, NN, noise_pipe, norm_type, noise_flag):
     ):
         boxes = None
 
-        if mode == "full_frame":
-            I_full = WFS.propagate(
+        if return_boxes:
+
+            I_full, I_crop, boxes = WFS.propagate(
                 pupil=propagation_pupil,
                 phi=phi,
-                no_crop=True,
+                return_both=True,
+                return_boxes=True,
             )
-            if noise_flag:
-                I_full = noise_pipe(I_full)
-            if return_boxes:
-                I_crop, boxes = WFS.crop_pyr(I_full, return_boxes=True)
-            else:
-                I_crop = WFS.crop_pyr(I_full, return_boxes=False)
+
         else:
-            if return_boxes:
-                I_full, I_crop, boxes = WFS.propagate(
-                    pupil=propagation_pupil,
-                    phi=phi,
-                    return_both=True,
-                    return_boxes=True,
-                )
-            else:
-                I_full, I_crop = WFS.propagate(
-                    pupil=propagation_pupil,
-                    phi=phi,
-                    return_both=True,
-                )
-            if noise_flag:
-                # Preserve historical RNG consumption order.
-                I_full = noise_pipe(I_full)
-                I_crop = noise_pipe(I_crop)
+
+            I_full, I_crop = WFS.propagate(
+                pupil=propagation_pupil,
+                phi=phi,
+                return_both=True,
+            )
+
+        if noise_flag:
+            I_crop = noise_pipe(
+                I_crop
+            )
 
         I_full = norm_I(I_full, norm=norm_type)
         I_crop = norm_I(I_crop, norm=norm_type)
