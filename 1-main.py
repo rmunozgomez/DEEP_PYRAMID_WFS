@@ -40,6 +40,226 @@ def _save_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
 
+CHECKPOINT_VERSION = 1
+
+
+def _save_training_checkpoint(
+    path: Path,
+    *,
+    NN,
+    optimizer,
+    scheduler,
+    cfg,
+    experiment_name: str,
+    stage_idx: int,
+    epoch: int,
+    best_val_loss: float,
+    train_loss_history,
+    val_loss_history,
+    train_open_std_history,
+    val_open_std_history,
+    train_last_std_history,
+    val_last_std_history,
+) -> None:
+    """
+    Save the complete state required to resume training
+    from the next epoch.
+
+    The save is atomic:
+        checkpoint_last.pt.tmp
+        -> checkpoint_last.pt
+    """
+
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    checkpoint = {
+        "checkpoint_version":
+            CHECKPOINT_VERSION,
+
+        "experiment_name":
+            str(experiment_name),
+
+        "stage_idx":
+            int(stage_idx),
+
+        # Last COMPLETED epoch.
+        "epoch":
+            int(epoch),
+
+        "best_val_loss":
+            float(best_val_loss),
+
+        # --------------------------------------------------------
+        # Trainable state
+        # --------------------------------------------------------
+
+        "model_state_dict":
+            NN.state_dict(),
+
+        "optimizer_state_dict":
+            optimizer.state_dict(),
+
+        "scheduler_state_dict": (
+            None
+            if scheduler is None
+            else scheduler.state_dict()
+        ),
+
+        # --------------------------------------------------------
+        # Histories for the current stage
+        # --------------------------------------------------------
+
+        "train_loss_history":
+            list(train_loss_history),
+
+        "val_loss_history":
+            list(val_loss_history),
+
+        "train_open_std_history":
+            list(train_open_std_history),
+
+        "val_open_std_history":
+            list(val_open_std_history),
+
+        "train_last_std_history":
+            list(train_last_std_history),
+
+        "val_last_std_history":
+            list(val_last_std_history),
+
+        # --------------------------------------------------------
+        # Configuration
+        # --------------------------------------------------------
+
+        "config_snapshot":
+            asdict(cfg),
+
+        # --------------------------------------------------------
+        # RNG state
+        # --------------------------------------------------------
+
+        "torch_rng_state":
+            torch.get_rng_state(),
+
+        "cuda_rng_state_all": (
+            torch.cuda.get_rng_state_all()
+            if torch.cuda.is_available()
+            else None
+        ),
+    }
+
+    temporary_path = path.with_suffix(
+        path.suffix + ".tmp"
+    )
+
+    torch.save(
+        checkpoint,
+        temporary_path,
+    )
+
+    # Atomic replacement on the same filesystem.
+    os.replace(
+        temporary_path,
+        path,
+    )
+
+
+def _load_training_checkpoint(
+    path: Path,
+    *,
+    device: str,
+):
+    """
+    Load and minimally validate a training checkpoint.
+    """
+
+    if not path.is_file():
+        raise FileNotFoundError(
+            "Resume was requested but checkpoint "
+            f"does not exist:\n{path}"
+        )
+
+    checkpoint = torch.load(
+        path,
+        map_location=device,
+    )
+
+    required_keys = {
+        "checkpoint_version",
+        "experiment_name",
+        "stage_idx",
+        "epoch",
+        "best_val_loss",
+        "model_state_dict",
+        "optimizer_state_dict",
+        "scheduler_state_dict",
+        "config_snapshot",
+        "train_loss_history",
+        "val_loss_history",
+        "train_open_std_history",
+        "val_open_std_history",
+        "train_last_std_history",
+        "val_last_std_history",
+    }
+
+    missing = (
+        required_keys
+        - set(checkpoint.keys())
+    )
+
+    if missing:
+        raise RuntimeError(
+            "Checkpoint is incomplete. Missing keys: "
+            f"{sorted(missing)}"
+        )
+
+    version = int(
+        checkpoint["checkpoint_version"]
+    )
+
+    if version != CHECKPOINT_VERSION:
+        raise RuntimeError(
+            "Unsupported checkpoint version: "
+            f"{version}. "
+            f"Expected {CHECKPOINT_VERSION}."
+        )
+
+    return checkpoint
+
+
+def _restore_rng_state(
+    checkpoint,
+) -> None:
+    """
+    Restore Torch RNG state when available.
+    """
+
+    torch_rng_state = checkpoint.get(
+        "torch_rng_state"
+    )
+
+    if torch_rng_state is not None:
+        torch.set_rng_state(
+            torch_rng_state.cpu()
+        )
+
+    cuda_states = checkpoint.get(
+        "cuda_rng_state_all"
+    )
+
+    if (
+        cuda_states is not None
+        and torch.cuda.is_available()
+    ):
+        torch.cuda.set_rng_state_all(
+            [
+                state.cpu()
+                for state in cuda_states
+            ]
+        )
 
 def _save_curve(
     stage_path: Path,
@@ -1493,6 +1713,16 @@ def main() -> None:
         default="DEBUG",
         type=str,
     )
+
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Resume training from checkpoint_last.pt "
+            "inside the experiment directory."
+        ),
+    )
+
     parser.add_argument(
         "--device",
         default="cuda:0",
@@ -1783,11 +2013,18 @@ def main() -> None:
         wfs_path / "figures_zernike"
     )
 
+
+
     wfs_path.mkdir(parents=True, exist_ok=True)
     wfs_figures_path.mkdir(parents=True, exist_ok=True)
     wfs_zernike_figures_path.mkdir(
         parents=True,
         exist_ok=True,
+    )
+
+    checkpoint_path = (
+        experiment_path
+        / "checkpoint_last.pt"
     )
 
     fig, ax = plt.subplots(
@@ -1850,6 +2087,113 @@ def main() -> None:
         },
         experiment_path / "config" / "all_cfg.pt",
     )
+
+    # ============================================================
+    # OPTIONAL TRAINING RESUME
+    # ============================================================
+
+    resume_checkpoint = None
+    resume_stage_idx = None
+    resume_next_epoch = 0
+
+    if args.resume:
+
+        resume_checkpoint = (
+            _load_training_checkpoint(
+                checkpoint_path,
+                device=device,
+            )
+        )
+
+        # --------------------------------------------------------
+        # Experiment identity
+        # --------------------------------------------------------
+
+        if (
+            resume_checkpoint["experiment_name"]
+            != experiment_name
+        ):
+            raise RuntimeError(
+                "Checkpoint experiment name does not "
+                "match the current experiment.\n"
+                f"checkpoint: "
+                f"{resume_checkpoint['experiment_name']}\n"
+                f"current: {experiment_name}"
+            )
+
+        # --------------------------------------------------------
+        # Configuration must be identical
+        # --------------------------------------------------------
+
+        current_config_snapshot = (
+            asdict(cfg)
+        )
+
+        if (
+            resume_checkpoint[
+                "config_snapshot"
+            ]
+            != current_config_snapshot
+        ):
+            raise RuntimeError(
+                "Current configuration differs from "
+                "the checkpoint configuration.\n"
+                "Exact resume requires the same config."
+            )
+
+        # --------------------------------------------------------
+        # Restore model
+        # --------------------------------------------------------
+
+        NN.load_state_dict(
+            resume_checkpoint[
+                "model_state_dict"
+            ],
+            strict=True,
+        )
+
+        resume_stage_idx = int(
+            resume_checkpoint[
+                "stage_idx"
+            ]
+        )
+
+        resume_next_epoch = (
+            int(
+                resume_checkpoint["epoch"]
+            )
+            + 1
+        )
+
+        if not (
+            0
+            <= resume_stage_idx
+            < len(stages_cfg)
+        ):
+            raise RuntimeError(
+                "Invalid stage_idx stored in checkpoint: "
+                f"{resume_stage_idx}"
+            )
+
+        print(
+            "\n"
+            "============================================================\n"
+            "RESUME ENABLED\n"
+            "============================================================"
+        )
+
+        print(
+            f"Checkpoint: {checkpoint_path}"
+        )
+
+        print(
+            f"Stored stage: {resume_stage_idx}"
+        )
+
+        print(
+            f"Next epoch: {resume_next_epoch}"
+        )
+
     torch.save(WFS, wfs_path / "WFS.pt")
 
     # ============================================================
@@ -1992,6 +2336,113 @@ def main() -> None:
         )
         plt.close(fig)
 
+
+    # ============================================================
+    # OPTIONAL TRAINING RESUME
+    # ============================================================
+
+    resume_checkpoint = None
+    resume_stage_idx = None
+    resume_next_epoch = 0
+
+    if args.resume:
+
+        resume_checkpoint = (
+            _load_training_checkpoint(
+                checkpoint_path,
+                device=device,
+            )
+        )
+
+        # --------------------------------------------------------
+        # Experiment identity
+        # --------------------------------------------------------
+
+        if (
+            resume_checkpoint["experiment_name"]
+            != experiment_name
+        ):
+            raise RuntimeError(
+                "Checkpoint experiment name does not "
+                "match the current experiment.\n"
+                f"checkpoint: "
+                f"{resume_checkpoint['experiment_name']}\n"
+                f"current: {experiment_name}"
+            )
+
+        # --------------------------------------------------------
+        # Configuration must be identical
+        # --------------------------------------------------------
+
+        current_config_snapshot = (
+            asdict(cfg)
+        )
+
+        if (
+            resume_checkpoint[
+                "config_snapshot"
+            ]
+            != current_config_snapshot
+        ):
+            raise RuntimeError(
+                "Current configuration differs from "
+                "the checkpoint configuration.\n"
+                "Exact resume requires the same config."
+            )
+
+        # --------------------------------------------------------
+        # Restore model
+        # --------------------------------------------------------
+
+        NN.load_state_dict(
+            resume_checkpoint[
+                "model_state_dict"
+            ],
+            strict=True,
+        )
+
+        resume_stage_idx = int(
+            resume_checkpoint[
+                "stage_idx"
+            ]
+        )
+
+        resume_next_epoch = (
+            int(
+                resume_checkpoint["epoch"]
+            )
+            + 1
+        )
+
+        if not (
+            0
+            <= resume_stage_idx
+            < len(stages_cfg)
+        ):
+            raise RuntimeError(
+                "Invalid stage_idx stored in checkpoint: "
+                f"{resume_stage_idx}"
+            )
+
+        print(
+            "\n"
+            "============================================================\n"
+            "RESUME ENABLED\n"
+            "============================================================"
+        )
+
+        print(
+            f"Checkpoint: {checkpoint_path}"
+        )
+
+        print(
+            f"Stored stage: {resume_stage_idx}"
+        )
+
+        print(
+            f"Next epoch: {resume_next_epoch}"
+        )
+
     # ============================================================
     # TRAINING STAGES
     # ============================================================
@@ -2000,6 +2451,29 @@ def main() -> None:
         atmosphere_cfg = stage_cfg.atmosphere
         loss_cfg = train_cfg.coef_loss
 
+        # ============================================================
+        # RESUME: skip stages already completed
+        # ============================================================
+
+        if (
+            resume_checkpoint is not None
+            and stage_idx < resume_stage_idx
+        ):
+            print(
+                f"Skipping completed stage {stage_idx}."
+            )
+            continue
+        if (
+            resume_checkpoint is not None
+            and stage_idx == resume_stage_idx
+            and resume_next_epoch
+            >= int(train_cfg.epochs)
+        ):
+            print(
+                f"Stage {stage_idx} was already completed "
+                f"({train_cfg.epochs} epochs)."
+            )
+            continue
         
         (
             train_batch_sizes,
@@ -2201,6 +2675,143 @@ def main() -> None:
         last_val_pack = None
         best_val_loss = math.inf
 
+        # ============================================================
+        # RESUME CURRENT STAGE
+        # ============================================================
+
+        start_epoch = 0
+
+        if (
+            resume_checkpoint is not None
+            and stage_idx == resume_stage_idx
+        ):
+
+            start_epoch = (
+                resume_next_epoch
+            )
+
+            # --------------------------------------------------------
+            # Optimizer
+            # --------------------------------------------------------
+
+            optimizer.load_state_dict(
+                resume_checkpoint[
+                    "optimizer_state_dict"
+                ]
+            )
+
+            # --------------------------------------------------------
+            # Scheduler
+            # --------------------------------------------------------
+
+            checkpoint_scheduler_state = (
+                resume_checkpoint[
+                    "scheduler_state_dict"
+                ]
+            )
+
+            if scheduler is None:
+
+                if checkpoint_scheduler_state is not None:
+                    raise RuntimeError(
+                        "Checkpoint contains a scheduler, "
+                        "but the current configuration does not."
+                    )
+
+            else:
+
+                if checkpoint_scheduler_state is None:
+                    raise RuntimeError(
+                        "Current configuration requires a scheduler, "
+                        "but the checkpoint does not contain one."
+                    )
+
+                scheduler.load_state_dict(
+                    checkpoint_scheduler_state
+                )
+
+            # --------------------------------------------------------
+            # Metrics / histories
+            # --------------------------------------------------------
+
+            train_loss_history = list(
+                resume_checkpoint[
+                    "train_loss_history"
+                ]
+            )
+
+            val_loss_history = list(
+                resume_checkpoint[
+                    "val_loss_history"
+                ]
+            )
+
+            train_open_std_history = list(
+                resume_checkpoint[
+                    "train_open_std_history"
+                ]
+            )
+
+            val_open_std_history = list(
+                resume_checkpoint[
+                    "val_open_std_history"
+                ]
+            )
+
+            train_last_std_history = list(
+                resume_checkpoint[
+                    "train_last_std_history"
+                ]
+            )
+
+            val_last_std_history = list(
+                resume_checkpoint[
+                    "val_last_std_history"
+                ]
+            )
+
+            best_val_loss = float(
+                resume_checkpoint[
+                    "best_val_loss"
+                ]
+            )
+
+            # --------------------------------------------------------
+            # Sanity check
+            # --------------------------------------------------------
+
+            history_lengths = {
+                len(train_loss_history),
+                len(val_loss_history),
+                len(train_open_std_history),
+                len(val_open_std_history),
+                len(train_last_std_history),
+                len(val_last_std_history),
+            }
+
+            if history_lengths != {
+                start_epoch
+            }:
+                raise RuntimeError(
+                    "Checkpoint history length does not "
+                    "match the next epoch.\n"
+                    f"start_epoch={start_epoch}, "
+                    f"history_lengths={sorted(history_lengths)}"
+                )
+
+            # --------------------------------------------------------
+            # RNG
+            # --------------------------------------------------------
+
+            _restore_rng_state(
+                resume_checkpoint
+            )
+
+            print(
+                f"Resuming stage {stage_idx} "
+                f"from epoch {start_epoch + 1}/{epochs}"
+            )
+
         print(
             f"Stage {stage_idx}: online generation | "
             f"train samples={train_samples}, "
@@ -2214,7 +2825,10 @@ def main() -> None:
             f"scintillation={atmosphere_cfg.scintillation}"
         )
 
-        for epoch in range(epochs):
+        for epoch in range(
+            start_epoch,
+            epochs,
+        ):
             # ====================================================
             # TRAIN
             # ====================================================
@@ -2681,6 +3295,8 @@ def main() -> None:
                     ),
                     "online_generation": True,
                     "validation_is_deterministic": True,
+                    "best_val_loss":
+                        float(best_val_loss),
                 },
                 stage_figures_path / "history.pt",
             )
@@ -2694,6 +3310,54 @@ def main() -> None:
                     str(stage_model_path / "model_full.pt")
                 )
                 torch.save(WFS, wfs_path / "WFS.pt")
+
+            # ====================================================
+            # SAVE LAST TRAINING CHECKPOINT
+            # ====================================================
+
+            _save_training_checkpoint(
+                checkpoint_path,
+
+                NN=NN,
+
+                optimizer=optimizer,
+
+                scheduler=scheduler,
+
+                cfg=cfg,
+
+                experiment_name=experiment_name,
+
+                stage_idx=stage_idx,
+
+                epoch=epoch,
+
+                best_val_loss=best_val_loss,
+
+                train_loss_history=(
+                    train_loss_history
+                ),
+
+                val_loss_history=(
+                    val_loss_history
+                ),
+
+                train_open_std_history=(
+                    train_open_std_history
+                ),
+
+                val_open_std_history=(
+                    val_open_std_history
+                ),
+
+                train_last_std_history=(
+                    train_last_std_history
+                ),
+
+                val_last_std_history=(
+                    val_last_std_history
+                ),
+            )
 
             # ====================================================
             # VALIDATION DEBUG PLOT
