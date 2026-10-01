@@ -919,6 +919,7 @@ def _build_training_camera_noise_from_saved_cfg(
             "The experiment does not contain camera_cfg."
         )
 
+
     def make_range(
         cfg: Dict[str, Any],
     ) -> camera_noise.Range:
@@ -1099,6 +1100,36 @@ def _build_training_camera_noise_from_saved_cfg(
     return camera_noise.CameraNoiseAugmenter(
         augmenter_cfg,
         generator=generator,
+    )
+
+def _start_training_camera_sequence(
+    noise_pipe,
+    WFS,
+    *,
+    device: str,
+    dtype: torch.dtype,
+) -> None:
+    """
+    Initialize one fixed physical camera realization for
+    the complete open/closed-loop sequence.
+
+    Only applies to the current camera implementation.
+    """
+
+    if not isinstance(
+        noise_pipe,
+        camera_noise.CameraNoiseAugmenter,
+    ):
+        return
+
+    camera_like = torch.empty(
+        tuple(WFS.output_shape),
+        device=device,
+        dtype=dtype,
+    )
+
+    noise_pipe.start_sequence(
+        camera_like
     )
 
 def load_model_bundle(model_info, device):
@@ -2871,6 +2902,14 @@ def run_closed_loop_single_model(
         )
 
     os.makedirs(output_model_test_path, exist_ok=True)
+
+    if noise_flag:
+        _start_training_camera_sequence(
+            noise_pipe,
+            WFS,
+            device=device,
+            dtype=shared_precision.real,
+        )
 
     forward_pipe = build_forward_pipe(
         WFS=WFS,

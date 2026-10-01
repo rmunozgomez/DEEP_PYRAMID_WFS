@@ -1083,6 +1083,36 @@ def _build_training_camera_noise_from_saved_cfg(
         generator=generator,
     )
 
+def _start_training_camera_sequence(
+    noise_pipe,
+    WFS,
+    *,
+    device: str,
+    dtype: torch.dtype,
+) -> None:
+    """
+    Initialize one fixed physical camera realization for
+    the complete open/closed-loop sequence.
+
+    Only applies to the current camera implementation.
+    """
+
+    if not isinstance(
+        noise_pipe,
+        camera_noise.CameraNoiseAugmenter,
+    ):
+        return
+
+    camera_like = torch.empty(
+        tuple(WFS.output_shape),
+        device=device,
+        dtype=dtype,
+    )
+
+    noise_pipe.start_sequence(
+        camera_like
+    )
+
 def load_model_bundle(model_info, device):
     train_path = model_info["train_path"]
     stage = model_info["stage"]
@@ -3426,6 +3456,14 @@ def run_stability_single_model(
         raise ValueError(
             f"Base incompatible para {Name}: zDecomposeMat contiene "
             f"{zDecomposeMat.shape[0]} modos y se esperaban {n_modes}."
+        )
+
+    if noise_flag:
+        _start_training_camera_sequence(
+            noise_pipe,
+            WFS,
+            device=device,
+            dtype=shared_precision.real,
         )
 
     forward_pipe = build_stability_forward_pipe(
