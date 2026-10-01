@@ -15,7 +15,8 @@ from . import config_parameters as P
 from .config_schema import (
     AtmosphereStageCfg,
     CameraNoiseCfg,
-    CameraNoiseDomainCfg,
+    CameraSignalDomainCfg,
+    CameraElectronicsCfg,
     CoefLossCfg,
     ExperimentCfg,
     ModelCfg,
@@ -74,6 +75,19 @@ def _range_cfg(
         low=low,
         high=high,
         log=log,
+    )
+
+def _optional_range_cfg(
+    value,
+    name: str,
+) -> Optional[RangeCfg]:
+
+    if value is None:
+        return None
+
+    return _range_cfg(
+        value,
+        name,
     )
 
 def _infer_num_stages() -> int:
@@ -359,120 +373,139 @@ def _build_stages() -> List[StageCfg]:
 def _build_camera_cfg() -> CameraNoiseCfg:
 
     return CameraNoiseCfg(
-        low=CameraNoiseDomainCfg(
-            peak_e=_range_cfg(
-                P.CAMERA_LOW_PEAK_E,
-                "CAMERA_LOW_PEAK_E",
+
+        # --------------------------------------------------
+        # Signal conditions
+        # --------------------------------------------------
+
+        low=CameraSignalDomainCfg(
+            signal_e=_range_cfg(
+                P.CAMERA_LOW_SIGNAL_E,
+                "CAMERA_LOW_SIGNAL_E",
             ),
             bg_e=_range_cfg(
                 P.CAMERA_LOW_BG_E,
                 "CAMERA_LOW_BG_E",
             ),
-            read_sigma_e=_range_cfg(
-                P.CAMERA_LOW_READ_SIGMA_E,
-                "CAMERA_LOW_READ_SIGMA_E",
-            ),
-            bias_dn=_range_cfg(
-                P.CAMERA_LOW_BIAS_DN,
-                "CAMERA_LOW_BIAS_DN",
-            ),
         ),
 
-        normal=CameraNoiseDomainCfg(
-            peak_e=_range_cfg(
-                P.CAMERA_NORMAL_PEAK_E,
-                "CAMERA_NORMAL_PEAK_E",
+        normal=CameraSignalDomainCfg(
+            signal_e=_range_cfg(
+                P.CAMERA_NORMAL_SIGNAL_E,
+                "CAMERA_NORMAL_SIGNAL_E",
             ),
             bg_e=_range_cfg(
                 P.CAMERA_NORMAL_BG_E,
                 "CAMERA_NORMAL_BG_E",
             ),
-            read_sigma_e=_range_cfg(
-                P.CAMERA_NORMAL_READ_SIGMA_E,
-                "CAMERA_NORMAL_READ_SIGMA_E",
-            ),
-            bias_dn=_range_cfg(
-                P.CAMERA_NORMAL_BIAS_DN,
-                "CAMERA_NORMAL_BIAS_DN",
-            ),
         ),
 
-        good=CameraNoiseDomainCfg(
-            peak_e=_range_cfg(
-                P.CAMERA_GOOD_PEAK_E,
-                "CAMERA_GOOD_PEAK_E",
+        good=CameraSignalDomainCfg(
+            signal_e=_range_cfg(
+                P.CAMERA_GOOD_SIGNAL_E,
+                "CAMERA_GOOD_SIGNAL_E",
             ),
             bg_e=_range_cfg(
                 P.CAMERA_GOOD_BG_E,
                 "CAMERA_GOOD_BG_E",
             ),
-            read_sigma_e=_range_cfg(
-                P.CAMERA_GOOD_READ_SIGMA_E,
-                "CAMERA_GOOD_READ_SIGMA_E",
+        ),
+
+        # --------------------------------------------------
+        # Camera electronics
+        # --------------------------------------------------
+
+        electronics=CameraElectronicsCfg(
+
+            gain_e_per_dn=_range_cfg(
+                P.CAMERA_GAIN_E_PER_DN,
+                "CAMERA_GAIN_E_PER_DN",
             ),
+
+            read_sigma_e=_range_cfg(
+                P.CAMERA_READ_SIGMA_E,
+                "CAMERA_READ_SIGMA_E",
+            ),
+
             bias_dn=_range_cfg(
-                P.CAMERA_GOOD_BIAS_DN,
-                "CAMERA_GOOD_BIAS_DN",
+                P.CAMERA_BIAS_DN,
+                "CAMERA_BIAS_DN",
+            ),
+
+            full_well_e=_optional_range_cfg(
+                P.CAMERA_FULL_WELL_E,
+                "CAMERA_FULL_WELL_E",
+            ),
+
+            output_mode=str(
+                P.CAMERA_OUTPUT_MODE
+            ),
+
+            mono16_align=str(
+                P.CAMERA_MONO16_ALIGN
+            ),
+
+            use_ste_adc=bool(
+                P.CAMERA_USE_STE_ADC
+            ),
+
+            add_prnu=bool(
+                P.CAMERA_ADD_PRNU
+            ),
+
+            prnu_sigma=float(
+                P.CAMERA_PRNU_SIGMA
+            ),
+
+            add_dsnu=bool(
+                P.CAMERA_ADD_DSNU
+            ),
+
+            dsnu_sigma_e=float(
+                P.CAMERA_DSNU_SIGMA_E
             ),
         ),
 
-        p_low=float(P.CAMERA_P_LOW),
-        p_normal=float(P.CAMERA_P_NORMAL),
-        p_good=float(P.CAMERA_P_GOOD),
+        # --------------------------------------------------
+        # Signal distribution
+        # --------------------------------------------------
 
-        parameter_mode=str(
-            P.CAMERA_PARAMETER_MODE
+        p_low=float(
+            P.CAMERA_P_LOW
+        ),
+
+        p_normal=float(
+            P.CAMERA_P_NORMAL
+        ),
+
+        p_good=float(
+            P.CAMERA_P_GOOD
+        ),
+
+        signal_scaling=str(
+            P.CAMERA_SIGNAL_SCALING
+        ),
+
+        signal_scope=str(
+            P.CAMERA_SIGNAL_SCOPE
+        ),
+
+        signal_parameter_mode=str(
+            P.CAMERA_SIGNAL_PARAMETER_MODE
+        ),
+
+        electronics_parameter_mode=str(
+            P.CAMERA_ELECTRONICS_PARAMETER_MODE
         ),
 
         shot_noise=str(
             P.CAMERA_SHOT_NOISE
         ),
 
-        output_mode=str(
-            P.CAMERA_OUTPUT_MODE
-        ),
-
-        mono16_align=str(
-            P.CAMERA_MONO16_ALIGN
-        ),
-
-        use_ste_adc=bool(
-            P.CAMERA_USE_STE_ADC
-        ),
-
-        auto_gain=bool(
-            P.CAMERA_AUTO_GAIN
-        ),
-
-        adc_headroom=float(
-            P.CAMERA_ADC_HEADROOM
-        ),
-
-        min_gain_e_per_dn=float(
-            P.CAMERA_MIN_GAIN_E_PER_DN
-        ),
-
-        add_prnu=bool(
-            P.CAMERA_ADD_PRNU
-        ),
-
-        prnu_sigma=float(
-            P.CAMERA_PRNU_SIGMA
-        ),
-
-        add_dsnu=bool(
-            P.CAMERA_ADD_DSNU
-        ),
-
-        dsnu_sigma_e=float(
-            P.CAMERA_DSNU_SIGMA_E
-        ),
-
         seed_offset=int(
             P.CAMERA_SEED_OFFSET
         ),
     )
-
 def get_config() -> ExperimentCfg:
     return ExperimentCfg(
         source=SourceCfg(

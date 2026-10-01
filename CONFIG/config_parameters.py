@@ -152,38 +152,143 @@ DM_BASIS_TYPE = "ACTUATOR"  # "ACTUATOR" | "ZERNIKE"
 DM_NAME = "BAX370_MRS"
 
 # ============================================================
-# CAMERA NOISE
+# CAMERA
 # ============================================================
 
-CAMERA_LOW_PEAK_E = (30.0, 150.0, True)
-CAMERA_LOW_BG_E = (0.5, 5.0, True)
-CAMERA_LOW_READ_SIGMA_E = (1.5, 3.5, False)
-CAMERA_LOW_BIAS_DN = (0.0, 3.0, False)
+# ------------------------------------------------------------
+# SIGNAL CONDITIONS
+# ------------------------------------------------------------
+#
+# signal_e is interpreted according to CAMERA_SIGNAL_SCALING:
+#
+# "peak":
+#     signal_e = expected electrons at the brightest point.
+#
+# "flux":
+#     signal_e = total expected electrons over the WFS image.
+#
+# "linear":
+#     expected_electrons = input_intensity * signal_e.
+#
+# For the current training setup, "peak" preserves the
+# interpretation used previously.
+#
+CAMERA_SIGNAL_SCALING = "peak"
 
-CAMERA_NORMAL_PEAK_E = (150.0, 1500.0, True)
-CAMERA_NORMAL_BG_E = (0.2, 3.0, True)
-CAMERA_NORMAL_READ_SIGMA_E = (0.8, 2.0, False)
-CAMERA_NORMAL_BIAS_DN = (0.0, 3.0, False)
+# Scope used when computing peak/flux normalization:
+#
+# "sample":
+#     all channels of one sample are considered one WFS image.
+#     Recommended for the current multi-pupil PWFS.
+#
+# "channel":
+#     each channel is normalized independently.
+#
+CAMERA_SIGNAL_SCOPE = "sample"
 
-CAMERA_GOOD_PEAK_E = (1500.0, 7000.0, True)
-CAMERA_GOOD_BG_E = (0.05, 1.0, True)
-CAMERA_GOOD_READ_SIGMA_E = (0.5, 1.2, False)
-CAMERA_GOOD_BIAS_DN = (0.0, 3.0, False)
+# Signal/background parameters can vary independently for each
+# synthetic realization.
+CAMERA_SIGNAL_PARAMETER_MODE = "per_sample"
 
+# LOW SIGNAL
+CAMERA_LOW_SIGNAL_E = (
+    30.0,
+    150.0,
+    True,
+)
+
+CAMERA_LOW_BG_E = (
+    0.5,
+    5.0,
+    True,
+)
+
+# NORMAL SIGNAL
+CAMERA_NORMAL_SIGNAL_E = (
+    150.0,
+    1500.0,
+    True,
+)
+
+CAMERA_NORMAL_BG_E = (
+    0.2,
+    3.0,
+    True,
+)
+
+# GOOD SIGNAL
+CAMERA_GOOD_SIGNAL_E = (
+    1500.0,
+    7000.0,
+    True,
+)
+
+CAMERA_GOOD_BG_E = (
+    0.05,
+    1.0,
+    True,
+)
+
+# Probability of each observing condition.
 CAMERA_P_LOW = 0.30
 CAMERA_P_NORMAL = 0.55
 CAMERA_P_GOOD = 0.15
 
-CAMERA_PARAMETER_MODE = "per_sample"
+
+# ------------------------------------------------------------
+# CAMERA ELECTRONICS
+# ------------------------------------------------------------
+#
+# These parameters describe the detector/electronics and are
+# independent from low/normal/good illumination conditions.
+#
+
+# One virtual detector configuration per batch/sequence.
+#
+# Change to "per_sample" if you explicitly want detector
+# domain randomization independently for every sample.
+CAMERA_ELECTRONICS_PARAMETER_MODE = "per_batch"
+
+# Conversion gain [electrons / DN].
+#
+# 30 e-/DN is only a synthetic starting value for the present
+# electron ranges + Mono8. Replace it with measured/spec data
+# when characterizing the real camera.
+CAMERA_GAIN_E_PER_DN = (
+    30.0,
+    30.0,
+    False,
+)
+
+# Readout noise [electrons RMS].
+CAMERA_READ_SIGMA_E = (
+    0.5,
+    3.5,
+    False,
+)
+
+# Digital black-level / bias [DN].
+CAMERA_BIAS_DN = (
+    0.0,
+    3.0,
+    False,
+)
+
+# Physical pixel full-well capacity [electrons].
+#
+# None:
+#     Disable physical full-well clipping.
+#
+# Example once known:
+# CAMERA_FULL_WELL_E = (10000.0, 10000.0, False)
+CAMERA_FULL_WELL_E = None
+
+
+# ------------------------------------------------------------
+# STOCHASTIC NOISE
+# ------------------------------------------------------------
+
 CAMERA_SHOT_NOISE = "poisson"
-
-CAMERA_OUTPUT_MODE = "Mono8"
-CAMERA_MONO16_ALIGN = "lsb"
-CAMERA_USE_STE_ADC = False
-
-CAMERA_AUTO_GAIN = True
-CAMERA_ADC_HEADROOM = 0.90
-CAMERA_MIN_GAIN_E_PER_DN = 1e-6
 
 CAMERA_ADD_PRNU = True
 CAMERA_PRNU_SIGMA = 0.005
@@ -191,8 +296,21 @@ CAMERA_PRNU_SIGMA = 0.005
 CAMERA_ADD_DSNU = True
 CAMERA_DSNU_SIGMA_E = 0.2
 
-CAMERA_SEED_OFFSET = 30_000_000
 
+# ------------------------------------------------------------
+# ADC / OUTPUT
+# ------------------------------------------------------------
+
+CAMERA_OUTPUT_MODE = "Mono8"
+CAMERA_MONO16_ALIGN = "lsb"
+CAMERA_USE_STE_ADC = False
+
+
+# ------------------------------------------------------------
+# REPRODUCIBILITY
+# ------------------------------------------------------------
+
+CAMERA_SEED_OFFSET = 30_000_000
 
 # ============================================================
 # TRAINING — PER STAGE

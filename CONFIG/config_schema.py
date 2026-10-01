@@ -303,33 +303,36 @@ class RangeCfg:
 
 
 @dataclass(frozen=True)
-class CameraNoiseDomainCfg:
-    peak_e: RangeCfg
+class CameraSignalDomainCfg:
+    """
+    Illumination/background condition.
+
+    signal_e meaning depends on signal_scaling:
+        peak   -> peak expected electrons
+        flux   -> total expected electrons
+        linear -> electrons per input-intensity unit
+    """
+    signal_e: RangeCfg
     bg_e: RangeCfg
-    read_sigma_e: RangeCfg
-    bias_dn: RangeCfg
 
 
 @dataclass(frozen=True)
-class CameraNoiseCfg:
-    low: CameraNoiseDomainCfg
-    normal: CameraNoiseDomainCfg
-    good: CameraNoiseDomainCfg
+class CameraElectronicsCfg:
+    """
+    Detector/electronics properties.
 
-    p_low: float = 0.30
-    p_normal: float = 0.55
-    p_good: float = 0.15
+    These parameters are independent from the illumination
+    regime (low / normal / good).
+    """
+    gain_e_per_dn: RangeCfg
+    read_sigma_e: RangeCfg
+    bias_dn: RangeCfg
 
-    parameter_mode: str = "per_sample"
-    shot_noise: str = "poisson"
+    full_well_e: Optional[RangeCfg] = None
 
     output_mode: str = "Mono8"
     mono16_align: str = "lsb"
     use_ste_adc: bool = False
-
-    auto_gain: bool = True
-    adc_headroom: float = 0.90
-    min_gain_e_per_dn: float = 1e-6
 
     add_prnu: bool = True
     prnu_sigma: float = 0.005
@@ -337,7 +340,146 @@ class CameraNoiseCfg:
     add_dsnu: bool = True
     dsnu_sigma_e: float = 0.2
 
+    def __post_init__(self) -> None:
+
+        if self.gain_e_per_dn.low <= 0:
+            raise ValueError(
+                "gain_e_per_dn must be strictly positive."
+            )
+
+        if self.read_sigma_e.low < 0:
+            raise ValueError(
+                "read_sigma_e cannot be negative."
+            )
+
+        if self.full_well_e is not None:
+            if self.full_well_e.low <= 0:
+                raise ValueError(
+                    "full_well_e must be strictly positive."
+                )
+
+        if self.output_mode not in (
+            "Mono8",
+            "Mono12",
+            "Mono16",
+        ):
+            raise ValueError(
+                f"Invalid output_mode: {self.output_mode}"
+            )
+
+        if self.mono16_align not in (
+            "lsb",
+            "msb",
+        ):
+            raise ValueError(
+                f"Invalid mono16_align: {self.mono16_align}"
+            )
+
+        if self.prnu_sigma < 0:
+            raise ValueError(
+                "prnu_sigma cannot be negative."
+            )
+
+        if self.dsnu_sigma_e < 0:
+            raise ValueError(
+                "dsnu_sigma_e cannot be negative."
+            )
+
+
+@dataclass(frozen=True)
+class CameraNoiseCfg:
+    low: CameraSignalDomainCfg
+    normal: CameraSignalDomainCfg
+    good: CameraSignalDomainCfg
+
+    electronics: CameraElectronicsCfg
+
+    p_low: float = 0.30
+    p_normal: float = 0.55
+    p_good: float = 0.15
+
+    signal_scaling: str = "peak"
+    signal_scope: str = "sample"
+
+    signal_parameter_mode: str = "per_sample"
+    electronics_parameter_mode: str = "per_batch"
+
+    shot_noise: str = "poisson"
+
     seed_offset: int = 30_000_000
+
+    def __post_init__(self) -> None:
+
+        probabilities = (
+            self.p_low,
+            self.p_normal,
+            self.p_good,
+        )
+
+        if any(
+            probability < 0
+            for probability in probabilities
+        ):
+            raise ValueError(
+                "Camera probabilities cannot be negative."
+            )
+
+        if sum(probabilities) <= 0:
+            raise ValueError(
+                "Camera probabilities must have a positive sum."
+            )
+
+        if self.signal_scaling not in (
+            "peak",
+            "flux",
+            "linear",
+        ):
+            raise ValueError(
+                f"Invalid signal_scaling: "
+                f"{self.signal_scaling}"
+            )
+
+        if self.signal_scope not in (
+            "sample",
+            "channel",
+        ):
+            raise ValueError(
+                f"Invalid signal_scope: "
+                f"{self.signal_scope}"
+            )
+
+        valid_parameter_modes = (
+            "per_batch",
+            "per_sample",
+            "per_channel",
+        )
+
+        if (
+            self.signal_parameter_mode
+            not in valid_parameter_modes
+        ):
+            raise ValueError(
+                "Invalid signal_parameter_mode: "
+                f"{self.signal_parameter_mode}"
+            )
+
+        if (
+            self.electronics_parameter_mode
+            not in valid_parameter_modes
+        ):
+            raise ValueError(
+                "Invalid electronics_parameter_mode: "
+                f"{self.electronics_parameter_mode}"
+            )
+
+        if self.shot_noise not in (
+            "poisson",
+            "gaussian",
+        ):
+            raise ValueError(
+                f"Invalid shot_noise: "
+                f"{self.shot_noise}"
+            )
 
     def __post_init__(self) -> None:
         probabilities = (

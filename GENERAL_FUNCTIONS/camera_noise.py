@@ -87,29 +87,101 @@ def pixel_response_box(x: Tensor, ksize: int = 3) -> Tensor:
 # ============================================================
 # B) Escala a electrones esperados (común en simulación)
 # ============================================================
-def to_expected_electrons_from_unit(
-    I_unit: Tensor,
-    peak_e: Union[float, Tensor],
+def to_expected_electrons(
+    intensity: Tensor,
+    signal_e: Union[float, Tensor],
+    *,
+    scaling: SignalScaling = "peak",
+    scope: SignalScope = "sample",
     eps: float = 1e-12,
 ) -> Tensor:
     """
-    Convierte intensidad "arbitraria" (I_unit >= 0) a electrones esperados λ_e.
-    Método típico: normalizar por max por imagen y definir peak_e.
-      λ_e = (I / max(I)) * peak_e
+    Convert arbitrary non-negative optical intensity into
+    expected photoelectrons.
+
+    scaling
+    -------
+    peak:
+        signal_e is the expected peak electron level.
+
+    flux:
+        signal_e is the expected total electron budget.
+
+    linear:
+        intensity is multiplied directly by signal_e.
+
+    scope
+    -----
+    sample:
+        All channels belong to one detector observation.
+
+    channel:
+        Each channel is normalized independently.
     """
-    I = ensure_4d(I_unit)
-    I = clamp_nonneg(I, 0.0)
 
-    Imax = I.amax(
-        dim=(-3, -2, -1),
-        keepdim=True,
-    ).clamp_min(eps)
+    I = ensure_4d(intensity)
+    I = clamp_nonneg(
+        I,
+        0.0,
+    )
 
-    Irel = I / Imax
+    level = _broadcast(
+        _as_tensor(
+            signal_e,
+            I,
+        ),
+        I,
+    )
 
-    pe = _broadcast(_as_tensor(peak_e, I), I)
-    lam_e = Irel * pe
-    return lam_e
+    if scaling == "linear":
+        return I * level
+
+    if scope == "sample":
+        reduce_dims = (
+            -3,
+            -2,
+            -1,
+        )
+
+    elif scope == "channel":
+        reduce_dims = (
+            -2,
+            -1,
+        )
+
+    else:
+        raise ValueError(
+            f"Unknown signal scope: {scope}"
+        )
+
+    if scaling == "peak":
+
+        reference = I.amax(
+            dim=reduce_dims,
+            keepdim=True,
+        ).clamp_min(
+            eps
+        )
+
+        normalized = I / reference
+
+    elif scaling == "flux":
+
+        reference = I.sum(
+            dim=reduce_dims,
+            keepdim=True,
+        ).clamp_min(
+            eps
+        )
+
+        normalized = I / reference
+
+    else:
+        raise ValueError(
+            f"Unknown signal scaling: {scaling}"
+        )
+
+    return normalized * level
 
 
 # ============================================================
@@ -334,16 +406,6 @@ class NoisePipeline:
         for fn, kwargs in self.steps:
             x = fn(x, **kwargs)
         return x
-# ============================================================
-# L) Augmenter de ruido realista para cámara WFS
-#    Entrada: (B,4,N,N), una pupila por canal
-# ============================================================
-from dataclasses import dataclass
-from typing import Tuple, Optional, Literal
-
-
-SignalMode = Literal["low", "normal", "good", "mixed"]
-
 
 # ============================================================
 # L) Camera Noise Augmenter general
@@ -363,15 +425,39 @@ SignalMode = Literal["low", "normal", "good", "mixed"]
 #       - auto-gain para evitar saturación artificial
 # ============================================================
 
-from dataclasses import dataclass
-from typing import Tuple, Optional, Literal, Dict
-import torch
+SignalMode = Literal[
+    "low",
+    "normal",
+    "good",
+]
 
-SignalMode = Literal["low", "normal", "good"]
-ParamMode = Literal["per_batch", "per_sample", "per_channel"]
-ShotNoiseMode = Literal["poisson", "gaussian"]
-OutputMode = Literal["Mono8", "Mono12", "Mono16"]
+ParamMode = Literal[
+    "per_batch",
+    "per_sample",
+    "per_channel",
+]
 
+ShotNoiseMode = Literal[
+    "poisson",
+    "gaussian",
+]
+
+OutputMode = Literal[
+    "Mono8",
+    "Mono12",
+    "Mono16",
+]
+
+SignalScaling = Literal[
+    "peak",
+    "flux",
+    "linear",
+]
+
+SignalScope = Literal[
+    "sample",
+    "channel",
+]
 
 @dataclass
 class Range:
@@ -405,69 +491,28 @@ class Range:
 
 
 @dataclass
-class CameraNoiseDomain:
+class CameraSignalDomain:
     """
-    Dominio de ruido para un régimen de señal.
-
-    peak_e:
-        Nivel máximo de electrones esperados.
-        Controla baja / normal / buena señal.
-
-    bg_e:
-        Background o dark actual en electrones.
-
-    read_sigma_e:
-        Ruido de lectura en electrones RMS.
-
-    bias_dn:
-        Offset digital antes de cuantizar.
+    Signal/background regime.
     """
-    peak_e: Range
+    signal_e: Range
     bg_e: Range
-    read_sigma_e: Range
-    bias_dn: Range
 
 
 @dataclass
-class CameraNoiseAugmentConfig:
+class CameraElectronics:
     """
-    Configuración general.
-
-    parameter_mode:
-        "per_batch"   -> mismos parámetros para todo el batch.
-        "per_sample"  -> parámetros distintos por muestra.
-        "per_channel" -> parámetros distintos por canal.
-                         Para (B,4,N,N), cada pupila puede tener ruido distinto.
-                         Para (B,1,N,N), funciona igual sin problema.
-
-    output_mode:
-        "Mono8"  -> cuantiza a 0..255.
-        "Mono12" -> cuantiza a 0..4095.
-        "Mono16" -> contenedor 16 bit con 12 bits efectivos.
-
-    auto_gain:
-        Si True, calcula gain_e_per_dn automáticamente para que la imagen
-        entre dentro del rango ADC sin saturar.
+    Physical/electronic detector properties.
     """
-    low: CameraNoiseDomain
-    normal: CameraNoiseDomain
-    good: CameraNoiseDomain
+    gain_e_per_dn: Range
+    read_sigma_e: Range
+    bias_dn: Range
 
-    p_low: float = 0.25
-    p_normal: float = 0.50
-    p_good: float = 0.25
-
-    parameter_mode: ParamMode = "per_channel"
-
-    shot_noise: ShotNoiseMode = "poisson"
+    full_well_e: Optional[Range] = None
 
     output_mode: OutputMode = "Mono8"
     mono16_align: AlignMode = "lsb"
     use_ste_adc: bool = False
-
-    auto_gain: bool = True
-    adc_headroom: float = 0.90
-    min_gain_e_per_dn: float = 1e-6
 
     add_prnu: bool = True
     prnu_sigma: float = 0.005
@@ -475,8 +520,29 @@ class CameraNoiseAugmentConfig:
     add_dsnu: bool = True
     dsnu_sigma_e: float = 0.2
 
-    return_metadata: bool = False
 
+@dataclass
+class CameraNoiseAugmentConfig:
+
+    low: CameraSignalDomain
+    normal: CameraSignalDomain
+    good: CameraSignalDomain
+
+    electronics: CameraElectronics
+
+    p_low: float = 0.30
+    p_normal: float = 0.55
+    p_good: float = 0.15
+
+    signal_scaling: SignalScaling = "peak"
+    signal_scope: SignalScope = "sample"
+
+    signal_parameter_mode: ParamMode = "per_sample"
+    electronics_parameter_mode: ParamMode = "per_batch"
+
+    shot_noise: ShotNoiseMode = "poisson"
+
+    return_metadata: bool = False
 
 def _adc_max_dn(mode: OutputMode) -> float:
     if mode == "Mono8":
@@ -523,7 +589,7 @@ def _choose_signal_domain(
     cfg: CameraNoiseAugmentConfig,
     x: Tensor,
     generator: Optional[torch.Generator] = None,
-) -> Tuple[str, CameraNoiseDomain]:
+) -> Tuple[str, CameraSignalDomain]:
     """
     Elige low / normal / good para toda la pasada.
     """
@@ -549,22 +615,81 @@ def _choose_signal_domain(
         return "good", cfg.good
 
 
-def _sample_domain_params(
-    domain: CameraNoiseDomain,
+def _sample_signal_params(
+    domain: CameraSignalDomain,
     x: Tensor,
     parameter_mode: ParamMode,
     generator: Optional[torch.Generator] = None,
 ) -> Dict[str, Tensor]:
 
-    shape = _param_shape(x, parameter_mode)
+    shape = _param_shape(
+        x,
+        parameter_mode,
+    )
 
     return {
-        "peak_e": domain.peak_e.sample(shape, x, generator),
-        "bg_e": domain.bg_e.sample(shape, x, generator),
-        "read_sigma_e": domain.read_sigma_e.sample(shape, x, generator),
-        "bias_dn": domain.bias_dn.sample(shape, x, generator),
+        "signal_e": domain.signal_e.sample(
+            shape,
+            x,
+            generator,
+        ),
+
+        "bg_e": domain.bg_e.sample(
+            shape,
+            x,
+            generator,
+        ),
     }
 
+
+def _sample_electronics_params(
+    electronics: CameraElectronics,
+    x: Tensor,
+    parameter_mode: ParamMode,
+    generator: Optional[torch.Generator] = None,
+) -> Dict[str, Optional[Tensor]]:
+
+    shape = _param_shape(
+        x,
+        parameter_mode,
+    )
+
+    params = {
+        "gain_e_per_dn":
+            electronics.gain_e_per_dn.sample(
+                shape,
+                x,
+                generator,
+            ),
+
+        "read_sigma_e":
+            electronics.read_sigma_e.sample(
+                shape,
+                x,
+                generator,
+            ),
+
+        "bias_dn":
+            electronics.bias_dn.sample(
+                shape,
+                x,
+                generator,
+            ),
+    }
+
+    if electronics.full_well_e is None:
+        params["full_well_e"] = None
+
+    else:
+        params["full_well_e"] = (
+            electronics.full_well_e.sample(
+                shape,
+                x,
+                generator,
+            )
+        )
+
+    return params
 
 def auto_electrons_to_dn_no_saturation(
     e: Tensor,
@@ -681,11 +806,6 @@ class CameraNoiseAugmenter:
         init=False,
         repr=False,
     )
-    _gain_e_per_dn: Optional[Tensor] = field(
-        default=None,
-        init=False,
-        repr=False,
-    )
 
     def start_sequence(
         self,
@@ -719,8 +839,8 @@ class CameraNoiseAugmenter:
         # PRNU: fixed multiplicative pixel response
         # --------------------------------------------------
         if (
-            self.cfg.add_prnu
-            and self.cfg.prnu_sigma > 0
+            self.cfg.electronics.add_prnu
+            and self.cfg.electronics.prnu_sigma > 0
         ):
             prnu_noise = torch.randn(
                 map_shape,
@@ -731,7 +851,7 @@ class CameraNoiseAugmenter:
 
             self._prnu_map = (
                 1.0
-                + self.cfg.prnu_sigma * prnu_noise
+                + self.cfg.electronics.prnu_sigma * prnu_noise
             ).clamp_min(0.0)
 
         else:
@@ -741,8 +861,8 @@ class CameraNoiseAugmenter:
         # DSNU: fixed additive pixel offset [electrons]
         # --------------------------------------------------
         if (
-            self.cfg.add_dsnu
-            and self.cfg.dsnu_sigma_e > 0
+            self.cfg.electronics.add_dsnu
+            and self.cfg.electronics.dsnu_sigma_e > 0
         ):
             dsnu_noise = torch.randn(
                 map_shape,
@@ -752,7 +872,7 @@ class CameraNoiseAugmenter:
             )
 
             self._dsnu_map = (
-                self.cfg.dsnu_sigma_e
+                self.cfg.electronics.dsnu_sigma_e
                 * dsnu_noise
             )
 
@@ -772,67 +892,28 @@ class CameraNoiseAugmenter:
         # --------------------------------------------------
         # Camera parameters fixed during this sequence
         # --------------------------------------------------
-        self._sequence_params = _sample_domain_params(
+        signal_params = _sample_signal_params(
             domain,
             x,
-            parameter_mode=self.cfg.parameter_mode,
+            parameter_mode=(
+                self.cfg.signal_parameter_mode
+            ),
             generator=self.generator,
         )
 
-        # --------------------------------------------------
-        # Fixed conversion gain for the whole sequence
-        # --------------------------------------------------
-        peak_e = _broadcast_param(
-            self._sequence_params["peak_e"],
+        electronics_params = _sample_electronics_params(
+            self.cfg.electronics,
             x,
+            parameter_mode=(
+                self.cfg.electronics_parameter_mode
+            ),
+            generator=self.generator,
         )
 
-        bg_e = _broadcast_param(
-            self._sequence_params["bg_e"],
-            x,
-        )
-
-        bias_dn = _broadcast_param(
-            self._sequence_params["bias_dn"],
-            x,
-        )
-
-        # Clean expected electron image for the
-        # reference frame.
-        lam_reference = to_expected_electrons_from_unit(
-            x,
-            peak_e=peak_e,
-        )
-
-        # Apply the same fixed detector PRNU that will be
-        # used during the sequence.
-        if self._prnu_map is not None:
-            lam_reference = apply_prnu_multiplicative(
-                lam_reference,
-                self._prnu_map,
-            )
-
-        # Add the fixed operating background.
-        lam_reference = add_background_e(
-            lam_reference,
-            bg_e=bg_e,
-        )
-
-        if self.cfg.auto_gain:
-            _, gain_e_per_dn = auto_electrons_to_dn_no_saturation(
-                lam_reference,
-                bias_dn=bias_dn,
-                output_mode=self.cfg.output_mode,
-                headroom=self.cfg.adc_headroom,
-                min_gain_e_per_dn=self.cfg.min_gain_e_per_dn,
-            )
-
-            self._gain_e_per_dn = gain_e_per_dn
-
-        else:
-            raise NotImplementedError(
-                "Fixed manual gain is not implemented yet."
-            )
+        self._sequence_params = {
+            **signal_params,
+            **electronics_params,
+        }
 
     def __call__(self, I_unit: Tensor):
         """
@@ -879,8 +960,8 @@ class CameraNoiseAugmenter:
         signal_mode = self._signal_mode
         params = self._sequence_params
 
-        peak_e = _broadcast_param(
-            params["peak_e"],
+        signal_e = _broadcast_param(
+            params["signal_e"],
             x,
         )
 
@@ -898,11 +979,28 @@ class CameraNoiseAugmenter:
             params["bias_dn"],
             x,
         )
-        # ----------------------------------------------------
-        # 2) Intensidad arbitraria -> electrones esperados
-        # ----------------------------------------------------
-        lam_e = to_expected_electrons_from_unit(x, peak_e=peak_e)
 
+        gain_e_per_dn = _broadcast_param(
+            params["gain_e_per_dn"],
+            x,
+        )
+
+        if params["full_well_e"] is None:
+            full_well_e = None
+        else:
+            full_well_e = _broadcast_param(
+                params["full_well_e"],
+                x,
+            )
+        # ----------------------------------------------------
+        # 2) Optical intensity -> expected electrons
+        # ----------------------------------------------------
+        lam_e = to_expected_electrons(
+            x,
+            signal_e=signal_e,
+            scaling=self.cfg.signal_scaling,
+            scope=self.cfg.signal_scope,
+        )
         # ----------------------------------------------------
         # 3) PRNU fijo durante la secuencia
         # ----------------------------------------------------
@@ -938,7 +1036,7 @@ class CameraNoiseAugmenter:
             )
 
         # ----------------------------------------------------
-        # 6) DSNU fijo durante la secuencia
+        # 6) Fixed DSNU
         # ----------------------------------------------------
         if self._dsnu_map is not None:
             e = apply_dsnu_additive(
@@ -947,7 +1045,18 @@ class CameraNoiseAugmenter:
             )
 
         # ----------------------------------------------------
-        # 7) Readout noise
+        # 7) Physical full-well saturation
+        # ----------------------------------------------------
+        if full_well_e is not None:
+            e = clip_full_well_e(
+                e,
+                full_well_e=full_well_e,
+            )
+        else:
+            e = e.clamp_min(0.0)
+
+        # ----------------------------------------------------
+        # 8) Temporal readout noise
         # ----------------------------------------------------
         e = read_noise_e(
             e,
@@ -955,47 +1064,68 @@ class CameraNoiseAugmenter:
             generator=self.generator,
         )
 
-        # No hay full well ni saturación física.
+        # Read noise can produce negative values.
         e = e.clamp_min(0.0)
-
         # ----------------------------------------------------
-        # 8) Electron -> DN using sequence-fixed gain
+        # 9) Electrons -> DN with configured camera gain
         # ----------------------------------------------------
-        if self._gain_e_per_dn is None:
-            raise RuntimeError(
-                "Camera gain is not initialized. "
-                "Call start_sequence(reference) first."
-            )
-
-        gain_e_per_dn = self._gain_e_per_dn
-
-        dn = electrons_to_dn_fixed_gain(
+        dn = electrons_to_dn(
             e,
-            bias_dn=bias_dn,
             gain_e_per_dn=gain_e_per_dn,
         )
 
+        dn = add_bias_dn(
+            dn,
+            bias_dn=bias_dn,
+        )
+
         # ----------------------------------------------------
-        # 9) Cuantización ADC, siempre activa
+        # 10) ADC quantization
         # ----------------------------------------------------
         dn_q = quantize_by_mode(
             dn,
-            mode=self.cfg.output_mode,
-            use_ste=self.cfg.use_ste_adc,
-            align=self.cfg.mono16_align,
+            mode=self.cfg.electronics.output_mode,
+            use_ste=self.cfg.electronics.use_ste_adc,
+            align=self.cfg.electronics.mono16_align,
         )
 
         if self.cfg.return_metadata:
             metadata = {
-                "signal_mode": signal_mode,
-                "peak_e": params["peak_e"].detach(),
-                "bg_e": params["bg_e"].detach(),
-                "read_sigma_e": params["read_sigma_e"].detach(),
-                "bias_dn": params["bias_dn"].detach(),
-                "gain_e_per_dn": gain_e_per_dn.detach(),
-                "adc_headroom": self.cfg.adc_headroom,
-                "output_mode": self.cfg.output_mode,
-                "input_shape": tuple(I_unit.shape),
+                "signal_mode":
+                    signal_mode,
+
+                "signal_scaling":
+                    self.cfg.signal_scaling,
+
+                "signal_scope":
+                    self.cfg.signal_scope,
+
+                "signal_e":
+                    params["signal_e"].detach(),
+
+                "bg_e":
+                    params["bg_e"].detach(),
+
+                "read_sigma_e":
+                    params["read_sigma_e"].detach(),
+
+                "bias_dn":
+                    params["bias_dn"].detach(),
+
+                "gain_e_per_dn":
+                    params["gain_e_per_dn"].detach(),
+
+                "full_well_e": (
+                    None
+                    if params["full_well_e"] is None
+                    else params["full_well_e"].detach()
+                ),
+
+                "output_mode":
+                    self.cfg.electronics.output_mode,
+
+                "input_shape":
+                    tuple(I_unit.shape),
             }
             return dn_q, metadata
 
