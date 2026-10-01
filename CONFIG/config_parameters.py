@@ -336,9 +336,19 @@ CAMERA_USE_STE_ADC = False
 CAMERA_SEED_OFFSET = 30_000_000
 
 # ============================================================
+# RUNTIME / NUMERICAL SETTINGS
+# ============================================================
+
+# Numerical precision used globally by the simulation,
+# WFS, modal basis and neural network.
+#
+# "single" -> float32 / complex64
+# "double" -> float64 / complex128
+PRECISION = "single"
+
+# ============================================================
 # TRAINING — PER STAGE
 # ============================================================
-PRECISION = "single"
 NORM_TYPE = ["zscore_global"] # "zscore", "zscore_global"
 
 # Phi-only spatial loss.

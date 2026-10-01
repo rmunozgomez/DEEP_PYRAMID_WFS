@@ -147,6 +147,29 @@ class ModelCfg:
     resolution: int = 128
 
 @dataclass(frozen=True)
+class RuntimeCfg:
+    """
+    Global numerical/runtime configuration.
+
+    Precision is global because telescope, WFS,
+    atmosphere, modal basis and neural network must use
+    compatible dtypes.
+    """
+
+    precision: PrecisionType = "single"
+
+    def __post_init__(self) -> None:
+
+        if self.precision not in (
+            "single",
+            "double",
+        ):
+            raise ValueError(
+                "precision must be "
+                "'single' or 'double'."
+            )
+
+@dataclass(frozen=True)
 class ModalBasisCfg:
     """
     Global modal/control basis configuration.
@@ -301,7 +324,6 @@ class CoefLossCfg:
 
 @dataclass(frozen=True)
 class TrainStageCfg:
-    precision: PrecisionType = "single"
     norm_type: NormType = "zscore"
     coef_loss: CoefLossCfg = field(default_factory=CoefLossCfg)
 
@@ -536,7 +558,7 @@ class CameraNoiseCfg:
 class ExperimentCfg:
     camera: CameraNoiseCfg
     modal_basis: ModalBasisCfg
-
+    runtime: RuntimeCfg
     source: SourceCfg = field(
         default_factory=SourceCfg
     )

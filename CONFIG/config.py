@@ -27,6 +27,7 @@ from .config_schema import (
     TrainStageCfg,
     WfsCfg,
     ModalBasisCfg,
+    RuntimeCfg,
 )
 
 
@@ -220,7 +221,6 @@ def _build_stages() -> List[StageCfg]:
     }
 
     training_values = {
-        "precision": _broadcast(P.PRECISION, n, "PRECISION"),
         "norm": _broadcast(P.NORM_TYPE, n, "NORM_TYPE"),
         "loss_metric": _broadcast(P.LOSS_TYPE, n, "LOSS_TYPE"),
         "loss_eps": _broadcast(P.LOSS_EPS, n, "LOSS_EPS"),
@@ -335,7 +335,6 @@ def _build_stages() -> List[StageCfg]:
         )
 
         train = TrainStageCfg(
-            precision=str(training_values["precision"][index]),
             norm_type=str(training_values["norm"][index]),
             coef_loss=loss,
             train_frac=float(training_values["train_frac"][index]),
@@ -365,6 +364,14 @@ def _build_stages() -> List[StageCfg]:
         stages.append(StageCfg(atmosphere=atmosphere, train=train))
 
     return stages
+
+def _build_runtime_cfg() -> RuntimeCfg:
+
+    return RuntimeCfg(
+        precision=str(
+            P.PRECISION
+        ).lower(),
+    )
 
 def _build_modal_basis_cfg() -> ModalBasisCfg:
 
@@ -590,6 +597,7 @@ def get_config() -> ExperimentCfg:
 
         camera=_build_camera_cfg(),
         modal_basis=_build_modal_basis_cfg(),
+        runtime=_build_runtime_cfg(),
         stages=_build_stages(),
     )
 

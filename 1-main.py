@@ -1299,6 +1299,7 @@ def main() -> None:
     wfs_cfg = cfg.wfs
     model_cfg = cfg.model
     modal_basis_cfg = cfg.modal_basis
+    runtime_cfg = cfg.runtime
     stages_cfg = cfg.stages
 
     phase_rad_to_wfe_nm = (
@@ -1311,8 +1312,9 @@ def main() -> None:
     experiment_name = arguments.expName
     pid = os.getpid()
 
-    precision = get_precision(stages_cfg[0].train.precision)
-
+    precision = get_precision(
+        runtime_cfg.precision
+    )
     # ============================================================
     # PUPILAS
     # ============================================================
@@ -1632,6 +1634,9 @@ def main() -> None:
             "camera_cfg": asdict(cfg.camera),
             "modal_basis_cfg": asdict(
                 cfg.modal_basis
+            ),
+            "runtime_cfg": asdict(
+                cfg.runtime
             ),
             "stages_cfg": [
                 asdict(stage) for stage in cfg.stages
