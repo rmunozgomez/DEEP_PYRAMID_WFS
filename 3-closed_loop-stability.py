@@ -1772,6 +1772,11 @@ def build_model_basis_bundle(
     # durante el entrenamiento.
     # ============================================================
 
+    n_modes = _get_model_n_modes(
+        model_info,
+        bundle,
+    )
+
     ideal_pupil = circular_pupil(
         n=resolution,
         device=device,
