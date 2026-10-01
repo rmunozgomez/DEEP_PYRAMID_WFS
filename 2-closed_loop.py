@@ -181,23 +181,29 @@ integrator_limit = 5.0
 # Models to compare
 # -------------------------
 MODELS_TO_TEST = [
-    {
-        "train_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/TRAIN/single/phiRes_128/nnRes_36/DM_BAX370_MRS/ACTUATOR/nModes_97/MODEL_ConvNeXtTiny/RAMA_zscore_channels",
-        "basis_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/MODAL_BASIS/DEFORMABLE_MIRROR_BASIS/BAX370_MRS/ACTUATOR_BASIS_RES_128.pt",
-        "stage": 0,
-        "Name": "convNext_zscore_channel",
-    },
-    {
-        "train_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/TRAIN/single/phiRes_128/nnRes_36/DM_BAX370_MRS/ACTUATOR/nModes_97/MODEL_ConvNeXtTiny/RAMA_zscore_global",
-        "basis_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/MODAL_BASIS/DEFORMABLE_MIRROR_BASIS/BAX370_MRS/ACTUATOR_BASIS_RES_128.pt",
-        "stage": 0,
-        "Name": "convNext_zscore_global",
-    },
+    # {
+    #     "train_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/TRAIN/single/phiRes_128/nnRes_36/DM_BAX370_MRS/ACTUATOR/nModes_97/MODEL_ConvNeXtTiny/RAMA_zscore_channels",
+    #     "basis_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/MODAL_BASIS/DEFORMABLE_MIRROR_BASIS/BAX370_MRS/ACTUATOR_BASIS_RES_128.pt",
+    #     "stage": 0,
+    #     "Name": "convNext_zscore_channel",
+    # },
+    # {
+    #     "train_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/TRAIN/single/phiRes_128/nnRes_36/DM_BAX370_MRS/ACTUATOR/nModes_97/MODEL_ConvNeXtTiny/RAMA_zscore_global",
+    #     "basis_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/MODAL_BASIS/DEFORMABLE_MIRROR_BASIS/BAX370_MRS/ACTUATOR_BASIS_RES_128.pt",
+    #     "stage": 0,
+    #     "Name": "convNext_zscore_global",
+    # },
     {
         "train_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/TRAIN/single/phiRes_128/nnRes_36/DM_BAX370_MRS/ACTUATOR/nModes_97/MODEL_ConvNeXtTiny/RAMA_zscore_global_source",
         "basis_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/MODAL_BASIS/DEFORMABLE_MIRROR_BASIS/BAX370_MRS/ACTUATOR_BASIS_RES_128.pt",
         "stage": 0,
         "Name": "convNext_zscore_global_source",
+    },
+    {
+        "train_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/TRAIN/single/phiRes_128/nnRes_36/DM_BAX370_MRS/ACTUATOR/nModes_97/MODEL_ConvNeXtTiny/RAMA_zscore_global_source_v2",
+        "basis_path": "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/MODAL_BASIS/DEFORMABLE_MIRROR_BASIS/BAX370_MRS/ACTUATOR_BASIS_RES_128.pt",
+        "stage": 0,
+        "Name": "convNext_zscore_global_source_v2",
     },
     
 ]
