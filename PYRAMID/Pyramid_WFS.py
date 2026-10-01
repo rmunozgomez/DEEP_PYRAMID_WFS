@@ -64,46 +64,154 @@ def pad2size(
 
     return y
 
-def circular_pupil(n: int, *, device=None, dtype=torch.float32, soft_edge_px: float = 0.0):
+def circular_pupil(
+    n: int,
+    *,
+    device=None,
+    dtype=torch.float32,
+    soft_edge_px: float = 0.0,
+) -> torch.Tensor:
     """
-    Genera una pupila circular centrada en una matriz n×n, con el radio máximo que cabe.
+    Generate a centered circular pupil.
 
-    - Si soft_edge_px == 0: retorna máscara float 0/1 (borde duro).
-    - Si soft_edge_px  > 0: retorna máscara suave en [0,1] con transición coseno.
+    Parameters
+    ----------
+    n:
+        Spatial resolution.
 
-    Retorna: (pupil, radius_px)
-      pupil: (n, n)
-      radius_px: float
+    device:
+        Torch device.
+
+    dtype:
+        Output floating-point dtype.
+
+    soft_edge_px:
+        Width in pixels of the cosine edge transition.
+
+        0:
+            hard binary pupil.
+
+        > 0:
+            cosine transition outside the nominal radius.
+
+    Returns
+    -------
+    pupil:
+        Tensor with shape [1, 1, n, n].
+
+        The shape is always identical regardless of whether
+        a hard or soft edge is used.
     """
+
     if n <= 0:
-        raise ValueError("n debe ser > 0")
+        raise ValueError(
+            "n must be positive."
+        )
 
-    # Centro geométrico
-    cx = (n - 1) / 2.0
-    cy = (n - 1) / 2.0
+    if soft_edge_px < 0:
+        raise ValueError(
+            "soft_edge_px cannot be negative."
+        )
 
-    # Radio máximo que cabe (hasta el borde más cercano)
-    radius_px = min(cx, cy, (n - 1 - cx), (n - 1 - cy))
+    # ============================================================
+    # Working precision
+    # ============================================================
 
-    y = torch.arange(n, device=device, dtype=torch.float32)
-    x = torch.arange(n, device=device, dtype=torch.float32)
-    X, Y = torch.meshgrid(x, y, indexing="xy")
-    R = torch.sqrt((X - cx) ** 2 + (Y - cy) ** 2)
+    if dtype == torch.float64:
+        work_dtype = torch.float64
+    else:
+        work_dtype = torch.float32
 
-    if soft_edge_px <= 0.0:
-        pupil = (R <= radius_px).to(dtype)
-        return pupil.unsqueeze(0).unsqueeze(0).to(dtype=dtype)
+    # ============================================================
+    # Geometric center
+    # ============================================================
 
-    # Borde suave: 1 dentro, transición coseno en [r, r+w], 0 fuera
-    w = float(soft_edge_px)
-    pupil = torch.ones((n, n), device=device, dtype=torch.float32)
-    pupil = torch.where(R >= (radius_px + w), torch.zeros_like(pupil), pupil)
+    center = (
+        n - 1
+    ) / 2.0
 
-    trans = (R > radius_px) & (R < (radius_px + w))
-    t = (R[trans] - radius_px) / w  # 0..1
-    pupil[trans] = 0.5 * (1.0 + torch.cos(torch.pi * t))  # 1 -> 0 suave
+    radius_px = center
 
-    return pupil.to(dtype)
+    coordinates = torch.arange(
+        n,
+        device=device,
+        dtype=work_dtype,
+    )
+
+    Y, X = torch.meshgrid(
+        coordinates,
+        coordinates,
+        indexing="ij",
+    )
+
+    radius = torch.sqrt(
+        (X - center) ** 2
+        + (Y - center) ** 2
+    )
+
+    # ============================================================
+    # Hard edge
+    # ============================================================
+
+    if soft_edge_px == 0:
+
+        pupil = (
+            radius <= radius_px
+        ).to(
+            dtype=dtype
+        )
+
+    # ============================================================
+    # Soft edge
+    # ============================================================
+
+    else:
+
+        width = torch.as_tensor(
+            float(soft_edge_px),
+            device=device,
+            dtype=work_dtype,
+        )
+
+        # Normalized transition:
+        #
+        # r <= radius       -> 0
+        # r >= radius + w   -> 1
+        transition = (
+            (radius - radius_px)
+            / width
+        ).clamp(
+            0.0,
+            1.0,
+        )
+
+        pupil = (
+            0.5
+            * (
+                1.0
+                + torch.cos(
+                    torch.pi
+                    * transition
+                )
+            )
+        )
+
+        # The cosine expression gives 1 before the transition
+        # and 0 after it because transition is clamped [0,1].
+        pupil = pupil.to(
+            dtype=dtype
+        )
+
+    # ============================================================
+    # Canonical WFS pupil shape
+    # ============================================================
+
+    return pupil[
+        None,
+        None,
+        :,
+        :,
+    ].contiguous()
 
 
 class Pyramid:
