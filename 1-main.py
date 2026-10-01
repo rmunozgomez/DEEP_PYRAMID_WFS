@@ -2088,112 +2088,6 @@ def main() -> None:
         experiment_path / "config" / "all_cfg.pt",
     )
 
-    # ============================================================
-    # OPTIONAL TRAINING RESUME
-    # ============================================================
-
-    resume_checkpoint = None
-    resume_stage_idx = None
-    resume_next_epoch = 0
-
-    if args.resume:
-
-        resume_checkpoint = (
-            _load_training_checkpoint(
-                checkpoint_path,
-                device=device,
-            )
-        )
-
-        # --------------------------------------------------------
-        # Experiment identity
-        # --------------------------------------------------------
-
-        if (
-            resume_checkpoint["experiment_name"]
-            != experiment_name
-        ):
-            raise RuntimeError(
-                "Checkpoint experiment name does not "
-                "match the current experiment.\n"
-                f"checkpoint: "
-                f"{resume_checkpoint['experiment_name']}\n"
-                f"current: {experiment_name}"
-            )
-
-        # --------------------------------------------------------
-        # Configuration must be identical
-        # --------------------------------------------------------
-
-        current_config_snapshot = (
-            asdict(cfg)
-        )
-
-        if (
-            resume_checkpoint[
-                "config_snapshot"
-            ]
-            != current_config_snapshot
-        ):
-            raise RuntimeError(
-                "Current configuration differs from "
-                "the checkpoint configuration.\n"
-                "Exact resume requires the same config."
-            )
-
-        # --------------------------------------------------------
-        # Restore model
-        # --------------------------------------------------------
-
-        NN.load_state_dict(
-            resume_checkpoint[
-                "model_state_dict"
-            ],
-            strict=True,
-        )
-
-        resume_stage_idx = int(
-            resume_checkpoint[
-                "stage_idx"
-            ]
-        )
-
-        resume_next_epoch = (
-            int(
-                resume_checkpoint["epoch"]
-            )
-            + 1
-        )
-
-        if not (
-            0
-            <= resume_stage_idx
-            < len(stages_cfg)
-        ):
-            raise RuntimeError(
-                "Invalid stage_idx stored in checkpoint: "
-                f"{resume_stage_idx}"
-            )
-
-        print(
-            "\n"
-            "============================================================\n"
-            "RESUME ENABLED\n"
-            "============================================================"
-        )
-
-        print(
-            f"Checkpoint: {checkpoint_path}"
-        )
-
-        print(
-            f"Stored stage: {resume_stage_idx}"
-        )
-
-        print(
-            f"Next epoch: {resume_next_epoch}"
-        )
-
     torch.save(WFS, wfs_path / "WFS.pt")
 
     # ============================================================
@@ -3238,6 +3132,16 @@ def main() -> None:
                 scheduler.step()
 
             # ====================================================
+            # SAVE BEST MODEL
+            # ====================================================
+            if val_loss_epoch < best_val_loss:
+                best_val_loss = val_loss_epoch
+                NN.save_full(
+                    str(stage_model_path / "model_full.pt")
+                )
+                torch.save(WFS, wfs_path / "WFS.pt")
+
+            # ====================================================
             # CURVES + HISTORY
             # ====================================================
             _save_curve(
@@ -3301,15 +3205,7 @@ def main() -> None:
                 stage_figures_path / "history.pt",
             )
 
-            # ====================================================
-            # SAVE BEST MODEL
-            # ====================================================
-            if val_loss_epoch < best_val_loss:
-                best_val_loss = val_loss_epoch
-                NN.save_full(
-                    str(stage_model_path / "model_full.pt")
-                )
-                torch.save(WFS, wfs_path / "WFS.pt")
+
 
             # ====================================================
             # SAVE LAST TRAINING CHECKPOINT
