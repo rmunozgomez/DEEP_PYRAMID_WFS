@@ -1518,11 +1518,27 @@ def build_model_basis_bundle(
     dtype: torch.dtype,
 ) -> ModelBasisBundle:
 
-    Name = model_info.get("Name", "<unknown>")
+    Name = model_info.get(
+        "Name",
+        "<unknown>",
+    )
 
-    atmosphere_cfg = bundle["atmosphere_cfg"]
-    telescope_cfg = bundle["telescope_cfg"]
-    WFS = bundle["WFS"]
+    atmosphere_cfg = bundle[
+        "atmosphere_cfg"
+    ]
+
+    modal_basis_cfg = bundle.get(
+        "modal_basis_cfg",
+        None,
+    )
+
+    telescope_cfg = bundle[
+        "telescope_cfg"
+    ]
+
+    WFS = bundle[
+        "WFS"
+    ]
 
     resolution = int(
         telescope_cfg["resolution"]
@@ -1561,12 +1577,57 @@ def build_model_basis_bundle(
             "telescope_cfg['resolution']."
         )
 
-    dm_basis = bool(
-        atmosphere_cfg.get(
-            "dm_basis",
-            False,
+    # ============================================================
+    # BASIS TYPE
+    # ============================================================
+
+    if modal_basis_cfg is not None:
+
+        dm_basis = bool(
+            modal_basis_cfg.get(
+                "use_dm_basis",
+                False,
+            )
         )
-    )
+
+        dm_basis_type = str(
+            modal_basis_cfg.get(
+                "basis_type",
+                "UNKNOWN",
+            )
+        ).upper()
+
+        dm_name = str(
+            modal_basis_cfg.get(
+                "name",
+                "UNKNOWN",
+            )
+        )
+
+    else:
+
+        # Legacy compatibility with experiments created
+        # before ModalBasisCfg was introduced.
+        dm_basis = bool(
+            atmosphere_cfg.get(
+                "dm_basis",
+                False,
+            )
+        )
+
+        dm_basis_type = str(
+            atmosphere_cfg.get(
+                "dm_basis_type",
+                "UNKNOWN",
+            )
+        ).upper()
+
+        dm_name = str(
+            atmosphere_cfg.get(
+                "dm_name",
+                "UNKNOWN",
+            )
+        )
     if dm_basis:
         basis_path = _resolve_dm_basis_path(model_info, bundle)
 
@@ -1621,8 +1682,7 @@ def build_model_basis_bundle(
             device=device,
             dtype=dtype,
         )
-        dm_basis_type = atmosphere_cfg.get("dm_basis_type", "UNKNOWN")
-        dm_name = atmosphere_cfg.get("dm_name", "UNKNOWN")
+
         basis_kind = f"DM_{dm_basis_type}"
 
         return ModelBasisBundle(
