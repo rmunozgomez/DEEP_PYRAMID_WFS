@@ -237,12 +237,38 @@ class Pyramid:
                 "crop_size_noise produces a non-positive crop size: "
                 f"{minimum_crop_size}"
             )
-        self.piston_wfs = self.propagate(
-            pupil=self.telescope_pupil,
-            phi=torch.zeros_like(
-                self.telescope_pupil
-            ),
+
+    @property
+    def output_shape(self) -> tuple[int, int, int, int]:
+        """
+        Expected WFS output shape for one realization.
+
+        This is derived directly from the WFS configuration and
+        does not require executing a propagation.
+        """
+
+        if self.crop_mode == "pupils":
+            return (
+                1,
+                int(self.nHeads),
+                int(self.output_resolution),
+                int(self.output_resolution),
+            )
+
+        if self.crop_mode == "full_frame":
+            return (
+                1,
+                1,
+                int(self.filter_resolution_total),
+                int(self.filter_resolution_total),
+            )
+
+        raise ValueError(
+            "Unsupported crop_mode: "
+            f"{self.crop_mode!r}. "
+            "Expected 'pupils' or 'full_frame'."
         )
+
     def propagate(
         self,
         phi,

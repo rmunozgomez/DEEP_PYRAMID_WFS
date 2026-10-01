@@ -1568,8 +1568,7 @@ def main() -> None:
         device=device,
         telescope_pupil=telescope_pupil
     )
-    wfs_output_shape = WFS.piston_wfs.shape
-
+    wfs_output_shape = WFS.output_shape
     # ============================================================
     # CAMERA NOISE
     # ============================================================

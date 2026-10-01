@@ -138,7 +138,36 @@ class WfsCfg:
     crop_pos_noise: int = 0
     crop_size_noise: int = 0
     offset: int = 0
+    def __post_init__(self) -> None:
 
+        if self.return_type not in (
+            "pupils",
+            "full_frame",
+        ):
+            raise ValueError(
+                "return_type must be "
+                "'pupils' or 'full_frame'."
+            )
+
+        if self.heads <= 0:
+            raise ValueError(
+                "heads must be positive."
+            )
+
+        if self.filter_ratio <= 0:
+            raise ValueError(
+                "filter_ratio must be positive."
+            )
+
+        if self.crop_pos_noise < 0:
+            raise ValueError(
+                "crop_pos_noise cannot be negative."
+            )
+
+        if self.crop_size_noise < 0:
+            raise ValueError(
+                "crop_size_noise cannot be negative."
+            )
 
 @dataclass(frozen=True)
 class ModelCfg:
