@@ -4,6 +4,7 @@ import argparse
 import torch
 import numpy as np
 from tqdm import tqdm
+from pathlib import Path
 import imageio.v2 as imageio
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
@@ -1337,41 +1338,143 @@ def _get_model_n_modes(
         )
 
     return n_modes
-
-def _resolve_dm_basis_path(model_info: Dict[str, Any], bundle: Dict[str, Any]) -> str:
+def _resolve_dm_basis_path(
+    model_info: Dict[str, Any],
+    bundle: Dict[str, Any],
+) -> str:
     """
-    Resolves the path of the DM basis used by this model.
+    Resolve the DM basis path.
 
-    Recommended for maximum safety:
-        MODELS_TO_TEST = [{..., "basis_path": "/exact/path/to/basis.pt"}]
-
-    If no explicit path is given, it recreates the convention used by your
-    dataset folders.
+    Priority:
+      1) explicit MODELS_TO_TEST["basis_path"]
+         or ["dm_basis_path"]
+      2) current modal_basis_cfg
+      3) legacy experiments must provide an explicit path
     """
-    for key in ("basis_path", "dm_basis_path"):
-        if key in model_info and model_info[key] is not None:
-            return str(model_info[key])
 
-    atmosphere_cfg = bundle["atmosphere_cfg"]
-    telescope_cfg = bundle["telescope_cfg"]
-
-    dm_basis_type = atmosphere_cfg.get("dm_basis_type", None)
-    dm_name = atmosphere_cfg.get("dm_name", None)
-
-    if dm_basis_type is None or dm_name is None:
-        raise KeyError(
-            f"El modelo {model_info.get('Name', '<unknown>')} tiene dm_basis=True, "
-            "pero falta atmosphere_cfg['dm_basis_type'] o atmosphere_cfg['dm_name']. "
-            "Puedes resolverlo agregando 'basis_path' en MODELS_TO_TEST."
-        )
-
-    resolution = int(telescope_cfg["resolution"])
-    return (
-        "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS_EVOLVE/"
-        f"DATASET/DEFORMABLE_MIRROR_BASIS/{dm_name}/"
-        f"{dm_basis_type}_BASIS_RES_{resolution}.pt"
+    repo_root = (
+        Path(__file__)
+        .resolve()
+        .parent
     )
 
+    # ============================================================
+    # EXPLICIT OVERRIDE
+    # ============================================================
+
+    for key in (
+        "basis_path",
+        "dm_basis_path",
+    ):
+
+        value = model_info.get(
+            key,
+            None,
+        )
+
+        if value is None:
+            continue
+
+        path = Path(
+            value
+        ).expanduser()
+
+        if not path.is_absolute():
+            path = (
+                repo_root
+                / path
+            )
+
+        return str(
+            path.resolve()
+        )
+
+    # ============================================================
+    # CURRENT CONFIG
+    # ============================================================
+
+    modal_basis_cfg = bundle.get(
+        "modal_basis_cfg",
+        None,
+    )
+
+    if modal_basis_cfg is None:
+
+        raise KeyError(
+            "This experiment does not contain "
+            "modal_basis_cfg and no explicit "
+            "'basis_path' was provided in "
+            "MODELS_TO_TEST."
+        )
+
+    required_keys = (
+        "root",
+        "name",
+        "basis_type",
+    )
+
+    missing = [
+        key
+        for key in required_keys
+        if key not in modal_basis_cfg
+    ]
+
+    if missing:
+        raise KeyError(
+            "modal_basis_cfg is incomplete. "
+            f"Missing keys: {missing}"
+        )
+
+    basis_root = Path(
+        modal_basis_cfg[
+            "root"
+        ]
+    ).expanduser()
+
+    if not basis_root.is_absolute():
+
+        basis_root = (
+            repo_root
+            / basis_root
+        )
+
+    basis_root = (
+        basis_root.resolve()
+    )
+
+    dm_name = str(
+        modal_basis_cfg[
+            "name"
+        ]
+    )
+
+    dm_basis_type = str(
+        modal_basis_cfg[
+            "basis_type"
+        ]
+    ).upper()
+
+    resolution = int(
+        bundle[
+            "telescope_cfg"
+        ][
+            "resolution"
+        ]
+    )
+
+    basis_path = (
+        basis_root
+        / dm_name
+        / (
+            f"{dm_basis_type}"
+            f"_BASIS_RES_"
+            f"{resolution}.pt"
+        )
+    )
+
+    return str(
+        basis_path
+    )
 
 def _slice_compose_matrix(zComposeMat: torch.Tensor, n_modes: int) -> torch.Tensor:
     """
