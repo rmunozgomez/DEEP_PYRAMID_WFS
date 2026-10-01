@@ -544,16 +544,6 @@ class CameraNoiseAugmentConfig:
 
     return_metadata: bool = False
 
-def _adc_max_dn(mode: OutputMode) -> float:
-    if mode == "Mono8":
-        return 255.0
-    elif mode == "Mono12":
-        return 4095.0
-    elif mode == "Mono16":
-        # Asumiendo 12 bits efectivos dentro del contenedor Mono16.
-        return 4095.0
-    else:
-        raise ValueError("output_mode debe ser 'Mono8', 'Mono12' o 'Mono16'")
 
 
 def _param_shape(x: Tensor, mode: ParamMode) -> Tuple[int, int]:
@@ -691,86 +681,6 @@ def _sample_electronics_params(
 
     return params
 
-def auto_electrons_to_dn_no_saturation(
-    e: Tensor,
-    bias_dn: Tensor,
-    output_mode: OutputMode,
-    *,
-    headroom: float = 0.90,
-    min_gain_e_per_dn: float = 1e-6,
-) -> Tuple[Tensor, Tensor]:
-    """
-    Convierte electrones a DN ajustando automáticamente el gain para que
-    la imagen quepa dentro del rango ADC.
-
-    e:
-        (B,C,H,W) electrones medidos.
-
-    bias_dn:
-        (B,C,1,1) bias digital.
-
-    Retorna:
-        dn_analog:
-            Imagen en DN antes de cuantización.
-
-        gain_e_per_dn:
-            Gain efectivo usado, en e-/DN, forma (B,C,1,1).
-    """
-    x = ensure_4d(e)
-
-    max_dn = _adc_max_dn(output_mode)
-    usable_max_dn = max_dn * headroom
-
-    # Máximo por muestra/canal.
-    e_max = x.amax(
-        dim=(-3, -2, -1),
-        keepdim=True,
-    ).clamp_min(
-        min_gain_e_per_dn
-    )
-    # Rango disponible después del bias.
-    available_dn = (usable_max_dn - bias_dn).clamp_min(1.0)
-
-    gain_e_per_dn = (e_max / available_dn).clamp_min(min_gain_e_per_dn)
-
-    dn_analog = x / gain_e_per_dn + bias_dn
-
-    return dn_analog, gain_e_per_dn
-
-def electrons_to_dn_fixed_gain(
-    e: Tensor,
-    bias_dn: Tensor,
-    gain_e_per_dn: Tensor,
-) -> Tensor:
-    """
-    Convert electrons to DN using a gain fixed for the
-    entire camera sequence.
-
-    Parameters
-    ----------
-    e:
-        Measured electrons, shape (B,C,H,W).
-
-    bias_dn:
-        Digital bias, broadcastable to (B,C,H,W).
-
-    gain_e_per_dn:
-        Fixed conversion gain [e-/DN], broadcastable to
-        (B,C,H,W).
-    """
-    x = ensure_4d(e)
-
-    gain = gain_e_per_dn.to(
-        device=x.device,
-        dtype=x.dtype,
-    ).clamp_min(1e-12)
-
-    bias = bias_dn.to(
-        device=x.device,
-        dtype=x.dtype,
-    )
-
-    return x / gain + bias
 
 @dataclass
 class CameraNoiseAugmenter:
@@ -809,17 +719,20 @@ class CameraNoiseAugmenter:
 
     def start_sequence(
         self,
-        reference: Tensor,
+        like: Tensor,
     ) -> None:
         """
-        Generate the fixed-pattern maps for one camera sequence.
+        Initialize one camera realization.
 
-        PRNU and DSNU remain constant for all frames belonging
-        to the same open/closed-loop realization.
+        The input tensor is used only to determine:
+            - batch/channel/spatial shape
+            - device
+            - dtype
 
-        A new call generates a new virtual camera realization.
+        Its intensity values are never used to determine
+        camera parameters.
         """
-        x = ensure_4d(reference)
+        x = ensure_4d(like)
         
         self._sequence_shape = tuple(
             int(value)
@@ -940,7 +853,7 @@ class CameraNoiseAugmenter:
             or self._sequence_shape is None
         ):
             raise RuntimeError(
-                "CameraNoiseAugmenter.start_sequence(reference) "
+                "CameraNoiseAugmenter.start_sequence(like) "
                 "must be called before applying camera noise."
             )
 

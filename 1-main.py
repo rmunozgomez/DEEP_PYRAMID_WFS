@@ -1164,43 +1164,106 @@ def _build_camera_noise(
             log=cfg.log,
         )
 
-    def make_domain(cfg):
-        return CameraNoiseDomain(
-            peak_e=make_range(cfg.peak_e),
-            bg_e=make_range(cfg.bg_e),
-            read_sigma_e=make_range(
-                cfg.read_sigma_e
+    def make_signal_domain(cfg):
+        return CameraSignalDomain(
+            signal_e=make_range(
+                cfg.signal_e
             ),
-            bias_dn=make_range(cfg.bias_dn),
+            bg_e=make_range(
+                cfg.bg_e
+            ),
         )
 
+    electronics_cfg = camera_cfg.electronics
+
+    electronics = CameraElectronics(
+        gain_e_per_dn=make_range(
+            electronics_cfg.gain_e_per_dn
+        ),
+
+        read_sigma_e=make_range(
+            electronics_cfg.read_sigma_e
+        ),
+
+        bias_dn=make_range(
+            electronics_cfg.bias_dn
+        ),
+
+        full_well_e=(
+            None
+            if electronics_cfg.full_well_e is None
+            else make_range(
+                electronics_cfg.full_well_e
+            )
+        ),
+
+        output_mode=(
+            electronics_cfg.output_mode
+        ),
+
+        mono16_align=(
+            electronics_cfg.mono16_align
+        ),
+
+        use_ste_adc=(
+            electronics_cfg.use_ste_adc
+        ),
+
+        add_prnu=(
+            electronics_cfg.add_prnu
+        ),
+
+        prnu_sigma=(
+            electronics_cfg.prnu_sigma
+        ),
+
+        add_dsnu=(
+            electronics_cfg.add_dsnu
+        ),
+
+        dsnu_sigma_e=(
+            electronics_cfg.dsnu_sigma_e
+        ),
+    )
+
     augmenter_cfg = CameraNoiseAugmentConfig(
-        low=make_domain(camera_cfg.low),
-        normal=make_domain(camera_cfg.normal),
-        good=make_domain(camera_cfg.good),
+        low=make_signal_domain(
+            camera_cfg.low
+        ),
+
+        normal=make_signal_domain(
+            camera_cfg.normal
+        ),
+
+        good=make_signal_domain(
+            camera_cfg.good
+        ),
+
+        electronics=electronics,
 
         p_low=camera_cfg.p_low,
         p_normal=camera_cfg.p_normal,
         p_good=camera_cfg.p_good,
 
-        parameter_mode=camera_cfg.parameter_mode,
-        shot_noise=camera_cfg.shot_noise,
-
-        output_mode=camera_cfg.output_mode,
-        mono16_align=camera_cfg.mono16_align,
-        use_ste_adc=camera_cfg.use_ste_adc,
-
-        auto_gain=camera_cfg.auto_gain,
-        adc_headroom=camera_cfg.adc_headroom,
-        min_gain_e_per_dn=(
-            camera_cfg.min_gain_e_per_dn
+        signal_scaling=(
+            camera_cfg.signal_scaling
         ),
 
-        add_prnu=camera_cfg.add_prnu,
-        prnu_sigma=camera_cfg.prnu_sigma,
+        signal_scope=(
+            camera_cfg.signal_scope
+        ),
 
-        add_dsnu=camera_cfg.add_dsnu,
-        dsnu_sigma_e=camera_cfg.dsnu_sigma_e,
+        signal_parameter_mode=(
+            camera_cfg.signal_parameter_mode
+        ),
+
+        electronics_parameter_mode=(
+            camera_cfg.electronics_parameter_mode
+        ),
+
+        shot_noise=(
+            camera_cfg.shot_noise
+        ),
 
         return_metadata=False,
     )
