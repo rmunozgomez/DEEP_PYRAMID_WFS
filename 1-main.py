@@ -14,12 +14,29 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 from ATMOSPHERE.atmosphere import Atmosphere
-from MODAL_BASIS.Zernike import *
-from GENERAL_FUNCTIONS.camera_noise import *
-from GENERAL_FUNCTIONS.functions_torch import *
+
+from MODAL_BASIS.Zernike import (
+    get_zernike_on_pupil,
+    zernike_compose_torch,
+)
+
+from GENERAL_FUNCTIONS.camera_noise import (
+    CameraElectronics,
+    CameraNoiseAugmentConfig,
+    CameraNoiseAugmenter,
+    CameraSignalDomain,
+    Range,
+)
+
+from GENERAL_FUNCTIONS.functions_torch import (
+    circular_pupil,
+    circular_pupil_telescope,
+    get_precision,
+    norm_I,
+)
+
 from NN.model_manager import ModelManager
 from PYRAMID.Pyramid_WFS import Pyramid
-from PYRAMID.functions_pyr_torch import *
 from CONFIG.config import get_config, save_run_info
 from GENERAL_FUNCTIONS.losses import CoefLoss
 

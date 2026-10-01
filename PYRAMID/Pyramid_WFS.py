@@ -1,8 +1,10 @@
 import torch
-import numpy as np
-import torch.nn as nn
 import torch.nn.functional as F
-from PYRAMID.functions_pyr_torch import *
+
+from PYRAMID.functions_pyr_torch import (
+    fourier_geometry,
+    predict_pupil_centers_m,
+)
 
 def pad2size(
     x: torch.Tensor,
