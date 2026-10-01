@@ -1132,6 +1132,61 @@ def _start_training_camera_sequence(
         camera_like
     )
 
+def _build_seeded_training_camera_for_bundle(
+    bundle: Dict[str, Any],
+    *,
+    device: str,
+    base_seed: int,
+):
+    """
+    Build the exact camera configuration stored with the
+    trained model and initialize its independent RNG.
+
+    The physical camera realization itself is created later
+    by _start_training_camera_sequence().
+    """
+
+    camera_cfg = bundle.get(
+        "camera_cfg",
+        None,
+    )
+
+    if camera_cfg is None:
+        raise RuntimeError(
+            "This experiment does not contain camera_cfg. "
+            "A current closed-loop evaluation requires a model "
+            "trained with the new camera configuration."
+        )
+
+    noise_pipe = (
+        _build_training_camera_noise_from_saved_cfg(
+            camera_cfg,
+            device=device,
+        )
+    )
+
+    camera_seed_offset = int(
+        camera_cfg.get(
+            "seed_offset",
+            0,
+        )
+    )
+
+    camera_seed = (
+        int(base_seed)
+        + camera_seed_offset
+    )
+
+    if noise_pipe.generator is not None:
+        noise_pipe.generator.manual_seed(
+            camera_seed
+        )
+
+    return (
+        noise_pipe,
+        camera_seed,
+    )
+
 def load_model_bundle(model_info, device):
     train_path = model_info["train_path"]
     stage = model_info["stage"]
@@ -3634,6 +3689,26 @@ def main():
             torch.set_rng_state(cpu_rng_state)
             if cuda_rng_states is not None:
                 torch.cuda.set_rng_state_all(cuda_rng_states)
+
+            if noise_flag:
+
+                noise_pipe, camera_seed = (
+                    _build_seeded_training_camera_for_bundle(
+                        bundle,
+                        device=device,
+                        base_seed=seed,
+                    )
+                )
+
+                print(
+                    f"Camera loaded | {Name} | "
+                    f"seed={camera_seed}"
+                )
+
+            else:
+
+                noise_pipe = None
+                camera_seed = None
 
             print(
                 f"Basis loaded | {Name} | "
