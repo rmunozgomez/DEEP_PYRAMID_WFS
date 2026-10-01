@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Tuple, Optional, Literal, Union, Any
 
 from GENERAL_FUNCTIONS.camera_noise import *
+import GENERAL_FUNCTIONS.camera_noise as camera_noise
 from GENERAL_FUNCTIONS.functions_torch import *
 from NN.model_manager import ModelManager
 
@@ -899,6 +900,206 @@ def build_noise_pipe(
     )
 
     return CameraNoiseAugmenter(cfg)
+
+def _build_training_camera_noise_from_saved_cfg(
+    camera_cfg: Dict[str, Any],
+    *,
+    device: str,
+) -> camera_noise.CameraNoiseAugmenter:
+    """
+    Rebuild exactly the camera-noise configuration stored
+    in all_cfg.pt by 1-main.py.
+
+    camera_cfg is a plain dict because it comes from
+    torch.load(.../config/all_cfg.pt).
+    """
+
+    if camera_cfg is None:
+        raise ValueError(
+            "The experiment does not contain camera_cfg."
+        )
+
+    def make_range(
+        cfg: Dict[str, Any],
+    ) -> camera_noise.Range:
+
+        return camera_noise.Range(
+            low=float(
+                cfg["low"]
+            ),
+            high=float(
+                cfg["high"]
+            ),
+            log=bool(
+                cfg.get(
+                    "log",
+                    False,
+                )
+            ),
+        )
+
+    def make_signal_domain(
+        cfg: Dict[str, Any],
+    ) -> camera_noise.CameraSignalDomain:
+
+        return camera_noise.CameraSignalDomain(
+            signal_e=make_range(
+                cfg["signal_e"]
+            ),
+            bg_e=make_range(
+                cfg["bg_e"]
+            ),
+        )
+
+    electronics_cfg = camera_cfg[
+        "electronics"
+    ]
+
+    full_well_cfg = electronics_cfg.get(
+        "full_well_e",
+        None,
+    )
+
+    electronics = camera_noise.CameraElectronics(
+        gain_e_per_dn=make_range(
+            electronics_cfg[
+                "gain_e_per_dn"
+            ]
+        ),
+
+        read_sigma_e=make_range(
+            electronics_cfg[
+                "read_sigma_e"
+            ]
+        ),
+
+        bias_dn=make_range(
+            electronics_cfg[
+                "bias_dn"
+            ]
+        ),
+
+        full_well_e=(
+            None
+            if full_well_cfg is None
+            else make_range(
+                full_well_cfg
+            )
+        ),
+
+        output_mode=electronics_cfg[
+            "output_mode"
+        ],
+
+        mono16_align=electronics_cfg[
+            "mono16_align"
+        ],
+
+        use_ste_adc=bool(
+            electronics_cfg[
+                "use_ste_adc"
+            ]
+        ),
+
+        add_prnu=bool(
+            electronics_cfg[
+                "add_prnu"
+            ]
+        ),
+
+        prnu_sigma=float(
+            electronics_cfg[
+                "prnu_sigma"
+            ]
+        ),
+
+        add_dsnu=bool(
+            electronics_cfg[
+                "add_dsnu"
+            ]
+        ),
+
+        dsnu_sigma_e=float(
+            electronics_cfg[
+                "dsnu_sigma_e"
+            ]
+        ),
+    )
+
+    augmenter_cfg = (
+        camera_noise.CameraNoiseAugmentConfig(
+            low=make_signal_domain(
+                camera_cfg[
+                    "low"
+                ]
+            ),
+
+            normal=make_signal_domain(
+                camera_cfg[
+                    "normal"
+                ]
+            ),
+
+            good=make_signal_domain(
+                camera_cfg[
+                    "good"
+                ]
+            ),
+
+            electronics=electronics,
+
+            p_low=float(
+                camera_cfg[
+                    "p_low"
+                ]
+            ),
+
+            p_normal=float(
+                camera_cfg[
+                    "p_normal"
+                ]
+            ),
+
+            p_good=float(
+                camera_cfg[
+                    "p_good"
+                ]
+            ),
+
+            signal_scaling=camera_cfg[
+                "signal_scaling"
+            ],
+
+            signal_scope=camera_cfg[
+                "signal_scope"
+            ],
+
+            signal_parameter_mode=camera_cfg[
+                "signal_parameter_mode"
+            ],
+
+            electronics_parameter_mode=camera_cfg[
+                "electronics_parameter_mode"
+            ],
+
+            shot_noise=camera_cfg[
+                "shot_noise"
+            ],
+
+            return_metadata=False,
+        )
+    )
+
+    generator = torch.Generator(
+        device=torch.device(
+            device
+        )
+    )
+
+    return camera_noise.CameraNoiseAugmenter(
+        augmenter_cfg,
+        generator=generator,
+    )
 
 def load_model_bundle(model_info, device):
     train_path = model_info["train_path"]
