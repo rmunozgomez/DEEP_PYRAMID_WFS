@@ -380,14 +380,17 @@ class Pyramid:
             dtype=intensity.dtype,
         )
 
-        boxes = np.zeros(
-            (
-                B,
-                N,
-                4,
-            ),
-            dtype=np.int64,
-        )
+        if return_boxes:
+            boxes = np.zeros(
+                (
+                    B,
+                    N,
+                    4,
+                ),
+                dtype=np.int64,
+            )
+        else:
+            boxes = None
 
         max_crop_size = (
             base_size
@@ -505,16 +508,17 @@ class Pyramid:
                 y0 = y - half_n
                 y1 = y + half_n
 
-                boxes[
-                    b,
-                    n,
-                    :,
-                ] = (
-                    x0,
-                    y0,
-                    x1,
-                    y1,
-                )
+                if return_boxes:
+                    boxes[
+                        b,
+                        n,
+                        :,
+                    ] = (
+                        x0,
+                        y0,
+                        x1,
+                        y1,
+                    )
 
                 # ====================================================
                 # Crop

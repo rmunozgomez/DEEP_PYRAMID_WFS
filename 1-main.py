@@ -881,6 +881,7 @@ def _run_open_closed_loop_batch(
     train_cfg,
     noise_pipe,
     camera_seed_offset: int,
+    collect_debug: bool = False,
     device: str,
 ):
     """Process one already generated online atmosphere batch.
@@ -910,11 +911,23 @@ def _run_open_closed_loop_batch(
         scintillation=scintillation,
     )
 
-    intensity, open_boxes = WFS.propagate(
-        phi=phi0,
-        pupil=effective_pupil0,
-        return_boxes=True,
-    )
+    if collect_debug:
+
+        intensity, open_boxes = WFS.propagate(
+            phi=phi0,
+            pupil=effective_pupil0,
+            return_boxes=True,
+        )
+
+    else:
+
+        intensity = WFS.propagate(
+            phi=phi0,
+            pupil=effective_pupil0,
+            return_boxes=False,
+        )
+
+        open_boxes = None
 
     if train_cfg.noise:
 
@@ -960,15 +973,23 @@ def _run_open_closed_loop_batch(
     with torch.no_grad():
         command = loop_gain * prediction.detach()
 
-    open_debug = (
-        phi0,
-        amplitude0,
-        effective_pupil0,
-        intensity,
-        prediction,
-        open_boxes,
-    )
-    last_debug = open_debug
+    if collect_debug:
+
+        open_debug = (
+            phi0,
+            amplitude0,
+            effective_pupil0,
+            intensity,
+            prediction,
+            open_boxes,
+        )
+
+        last_debug = open_debug
+
+    else:
+
+        open_debug = None
+        last_debug = None
 
     # -------------------------------------------------
     # TEMPORAL CLOSED LOOP
@@ -994,11 +1015,23 @@ def _run_open_closed_loop_batch(
                 phi_atmosphere - phi_correction
             ) * telescope_pupil
 
-        intensity_closed, closed_boxes = WFS.propagate(
-            phi=phi_state,
-            pupil=effective_pupil_atmosphere,
-            return_boxes=True,
-        )
+            if collect_debug:
+
+                intensity_closed, closed_boxes = WFS.propagate(
+                    phi=phi_state,
+                    pupil=effective_pupil_atmosphere,
+                    return_boxes=True,
+                )
+
+            else:
+
+                intensity_closed = WFS.propagate(
+                    phi=phi_state,
+                    pupil=effective_pupil_atmosphere,
+                    return_boxes=False,
+                )
+
+                closed_boxes = None
         if train_cfg.noise:
             intensity_closed = noise_pipe(intensity_closed)
         intensity_closed = norm_I(
@@ -1022,14 +1055,16 @@ def _run_open_closed_loop_batch(
                 + loop_gain * residual_prediction.detach()
             )
 
-        last_debug = (
-            phi_state,
-            amplitude_atmosphere,
-            effective_pupil_atmosphere,
-            intensity_closed,
-            residual_prediction,
-            closed_boxes,
-        )
+        if collect_debug:
+
+            last_debug = (
+                phi_state,
+                amplitude_atmosphere,
+                effective_pupil_atmosphere,
+                intensity_closed,
+                residual_prediction,
+                closed_boxes,
+            )
 
     total_loss = total_loss / (int(train_cfg.cl_iter) + 1)
 
@@ -2049,6 +2084,7 @@ def main() -> None:
                     camera_seed_offset=camera_cfg.seed_offset,
                     train_cfg=train_cfg,
                     noise_pipe=noise_pipe,
+                    collect_debug=False,
                     device=device,
                 )
 
@@ -2164,7 +2200,9 @@ def main() -> None:
                         profile,
                         realization_seed=batch_seed,
                     )
-
+                    collect_debug = (
+                        batch_idx == val_batches - 1
+                    )
                     output = _run_open_closed_loop_batch(
                         atmosphere=atmosphere,
                         initial_phase=initial_phase,
@@ -2178,29 +2216,13 @@ def main() -> None:
                         camera_seed_offset=camera_cfg.seed_offset,
                         train_cfg=train_cfg,
                         noise_pipe=noise_pipe,
+                        collect_debug=collect_debug,
                         device=device,
                     )
 
                     total_loss = output["total_loss"]
                     step_logs = output["step_logs"]
 
-                    (
-                        open_phi,
-                        open_amplitude,
-                        open_effective_pupil,
-                        open_I,
-                        open_pred,
-                        open_boxes,
-                    ) = output["open_debug"]
-
-                    (
-                        last_phi,
-                        last_amplitude,
-                        last_effective_pupil,
-                        last_I,
-                        last_pred,
-                        last_boxes,
-                    ) = output["last_debug"]
 
                     running_loss += float(
                         total_loss.detach().cpu()
@@ -2251,36 +2273,60 @@ def main() -> None:
                         ),
                     )
 
-                    last_val_pack = {
-                        "open_phi": open_phi[-1:].cpu(),
-                        "open_amplitude": open_amplitude[-1:].cpu(),
+                    if collect_debug:
 
-                        "open_effective_pupil": (
-                            open_effective_pupil[-1:].cpu()
-                        ),
+                        (
+                            open_phi,
+                            open_amplitude,
+                            open_effective_pupil,
+                            open_I,
+                            open_pred,
+                            open_boxes,
+                        ) = output["open_debug"]
 
-                        "open_I": open_I[-1:].cpu(),
-                        "open_pred": open_pred[-1:].cpu(),
+                        (
+                            last_phi,
+                            last_amplitude,
+                            last_effective_pupil,
+                            last_I,
+                            last_pred,
+                            last_boxes,
+                        ) = output["last_debug"]
 
-                        # NUEVO
-                        "open_boxes": open_boxes[-1],
+                        last_val_pack = {
+                            "open_phi":
+                                open_phi[-1:].cpu(),
 
-                        "last_phi": last_phi[-1:].cpu(),
-                        "last_amplitude": last_amplitude[-1:].cpu(),
+                            "open_amplitude":
+                                open_amplitude[-1:].cpu(),
 
-                        "last_effective_pupil": (
-                            last_effective_pupil[-1:].cpu()
-                        ),
+                            "open_effective_pupil":
+                                open_effective_pupil[-1:].cpu(),
 
-                        "last_I": last_I[-1:].cpu(),
-                        "last_pred": last_pred[-1:].cpu(),
+                            "open_pred":
+                                open_pred[-1:].cpu(),
 
-                        # NUEVO
-                        "last_boxes": last_boxes[-1],
+                            "open_boxes":
+                                open_boxes[-1],
 
-                        "profile": asdict(profile),
-                    }
+                            "last_phi":
+                                last_phi[-1:].cpu(),
 
+                            "last_amplitude":
+                                last_amplitude[-1:].cpu(),
+
+                            "last_effective_pupil":
+                                last_effective_pupil[-1:].cpu(),
+
+                            "last_pred":
+                                last_pred[-1:].cpu(),
+
+                            "last_boxes":
+                                last_boxes[-1],
+
+                            "profile":
+                                asdict(profile),
+                        }
             val_loss_epoch = running_loss / val_batches
             val_open_std_epoch = (
                 running_open_std / val_batches
