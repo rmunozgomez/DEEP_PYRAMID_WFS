@@ -1241,23 +1241,102 @@ def _as_4d_pupil(pupil: torch.Tensor, *, device: str, dtype: torch.dtype) -> tor
     return pupil
 
 
-def _get_model_n_modes(model_info: Dict[str, Any], bundle: Dict[str, Any]) -> int:
+def _get_model_n_modes(
+    model_info: Dict[str, Any],
+    bundle: Dict[str, Any],
+) -> int:
     """
-    Priority:
-      1) explicit override in MODELS_TO_TEST[...]["n_modes"]
-      2) training atmosphere_cfg["n_modes"]
-    """
-    if "n_modes" in model_info and model_info["n_modes"] is not None:
-        return int(model_info["n_modes"])
+    Resolve the number of controlled modes.
 
-    atmosphere_cfg = bundle["atmosphere_cfg"]
+    Priority:
+      1) explicit MODELS_TO_TEST["n_modes"] override
+      2) current modal_basis_cfg["n_modes"]
+      3) legacy atmosphere_cfg["n_modes"]
+    """
+
+    # ============================================================
+    # EXPLICIT OVERRIDE
+    # ============================================================
+
+    explicit_n_modes = model_info.get(
+        "n_modes",
+        None,
+    )
+
+    if explicit_n_modes is not None:
+
+        n_modes = int(
+            explicit_n_modes
+        )
+
+        if n_modes <= 0:
+            raise ValueError(
+                "model_info['n_modes'] "
+                "must be positive."
+            )
+
+        return n_modes
+
+    # ============================================================
+    # CURRENT CONFIG
+    # ============================================================
+
+    modal_basis_cfg = bundle.get(
+        "modal_basis_cfg",
+        None,
+    )
+
+    if modal_basis_cfg is not None:
+
+        if "n_modes" not in modal_basis_cfg:
+            raise KeyError(
+                "modal_basis_cfg does not contain "
+                "'n_modes'."
+            )
+
+        n_modes = int(
+            modal_basis_cfg[
+                "n_modes"
+            ]
+        )
+
+        if n_modes <= 0:
+            raise ValueError(
+                "modal_basis_cfg['n_modes'] "
+                "must be positive."
+            )
+
+        return n_modes
+
+    # ============================================================
+    # LEGACY FALLBACK
+    # ============================================================
+
+    atmosphere_cfg = bundle[
+        "atmosphere_cfg"
+    ]
+
     if "n_modes" not in atmosphere_cfg:
         raise KeyError(
-            f"El modelo {model_info.get('Name', '<unknown>')} no tiene atmosphere_cfg['n_modes']. "
-            "Agrega 'n_modes' en MODELS_TO_TEST para este modelo."
+            "Could not determine n_modes. "
+            "Neither modal_basis_cfg['n_modes'] "
+            "nor legacy atmosphere_cfg['n_modes'] "
+            "is available."
         )
-    return int(atmosphere_cfg["n_modes"])
 
+    n_modes = int(
+        atmosphere_cfg[
+            "n_modes"
+        ]
+    )
+
+    if n_modes <= 0:
+        raise ValueError(
+            "Legacy atmosphere_cfg['n_modes'] "
+            "must be positive."
+        )
+
+    return n_modes
 
 def _resolve_dm_basis_path(model_info: Dict[str, Any], bundle: Dict[str, Any]) -> str:
     """
