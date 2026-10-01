@@ -3266,17 +3266,77 @@ def main():
     print(f"Loading reference config on CPU: {first_model_info['Name']}")
     ref_cfg = torch.load(first_config_path, map_location="cpu")
 
-    ref_telescope_cfg = ref_cfg["telescope_cfg"]
-    ref_stage_cfg = ref_cfg["stages_cfg"][
-        0 if first_stage is None else first_stage
-    ]
-    ref_train_cfg = ref_stage_cfg["train"]
-    ref_precision = get_precision(ref_train_cfg["precision"])
+    ref_telescope_cfg = (
+        ref_cfg[
+            "telescope_cfg"
+        ]
+    )
 
-    ref_resolution = int(ref_telescope_cfg["resolution"])
-    ref_diameter = float(ref_telescope_cfg["diameter"])
-    ref_precision_name = ref_train_cfg["precision"]
+    ref_stage_cfg = (
+        ref_cfg[
+            "stages_cfg"
+        ][
+            0
+            if first_stage is None
+            else int(first_stage)
+        ]
+    )
 
+    ref_train_cfg = (
+        ref_stage_cfg[
+            "train"
+        ]
+    )
+
+    # ============================================================
+    # GLOBAL PRECISION
+    # ============================================================
+
+    ref_runtime_cfg = ref_cfg.get(
+        "runtime_cfg",
+        None,
+    )
+
+    if ref_runtime_cfg is not None:
+
+        ref_precision_name = str(
+            ref_runtime_cfg[
+                "precision"
+            ]
+        ).lower()
+
+    else:
+
+        # Compatibility with experiments trained
+        # before RuntimeCfg was introduced.
+        if "precision" not in ref_train_cfg:
+            raise KeyError(
+                "Reference experiment contains neither "
+                "runtime_cfg['precision'] nor "
+                "legacy train_cfg['precision']."
+            )
+
+        ref_precision_name = str(
+            ref_train_cfg[
+                "precision"
+            ]
+        ).lower()
+
+    ref_precision = get_precision(
+        ref_precision_name
+    )
+
+    ref_resolution = int(
+        ref_telescope_cfg[
+            "resolution"
+        ]
+    )
+
+    ref_diameter = float(
+        ref_telescope_cfg[
+            "diameter"
+        ]
+    )
     ref_bundle_for_atmosphere = {
         "cfg": ref_cfg,
     }
