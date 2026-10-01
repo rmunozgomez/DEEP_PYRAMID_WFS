@@ -481,49 +481,6 @@ class CameraNoiseCfg:
                 f"{self.shot_noise}"
             )
 
-    def __post_init__(self) -> None:
-        probabilities = (
-            self.p_low,
-            self.p_normal,
-            self.p_good,
-        )
-
-        if any(p < 0 for p in probabilities):
-            raise ValueError(
-                "Camera probabilities cannot be negative."
-            )
-
-        if sum(probabilities) <= 0:
-            raise ValueError(
-                "Camera probabilities must have a positive sum."
-            )
-
-        if self.parameter_mode not in (
-            "per_batch",
-            "per_sample",
-            "per_channel",
-        ):
-            raise ValueError(
-                f"Invalid parameter_mode: {self.parameter_mode}"
-            )
-
-        if self.shot_noise not in (
-            "poisson",
-            "gaussian",
-        ):
-            raise ValueError(
-                f"Invalid shot_noise: {self.shot_noise}"
-            )
-
-        if self.output_mode not in (
-            "Mono8",
-            "Mono12",
-            "Mono16",
-        ):
-            raise ValueError(
-                f"Invalid output_mode: {self.output_mode}"
-            )
-
 
 @dataclass(frozen=True)
 class ExperimentCfg:
