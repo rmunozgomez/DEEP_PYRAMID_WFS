@@ -901,6 +901,12 @@ def load_model_bundle(model_info, device):
         None,
     )
 
+    modal_basis_cfg = cfg.get(
+        "modal_basis_cfg",
+        None,
+    )
+
+
     if runtime_cfg is not None:
 
         precision_name = str(
@@ -945,6 +951,7 @@ def load_model_bundle(model_info, device):
         "train_cfg": train_cfg,
         "runtime_cfg": runtime_cfg,
         "precision_name": precision_name,
+        "modal_basis_cfg": modal_basis_cfg,
         "precision": precision,
         "WFS": WFS,
         "NN": NN,
