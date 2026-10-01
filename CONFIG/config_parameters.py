@@ -70,7 +70,7 @@ NN_RESOLUTION = 36
 # ATMOSPHERE — PER STAGE
 # ============================================================
 # Total online samples generated per epoch: train + validation.
-ATMOSPHERE_SAMPLES = [100000]
+ATMOSPHERE_SAMPLES = [500]
 
 # D/r0 is sampled uniformly inside this interval, then r0 = D / (D/r0).
 ATMOSPHERE_DR0_RANGE = [[5.0, 40.0]]

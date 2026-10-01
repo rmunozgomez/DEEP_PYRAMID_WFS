@@ -2256,7 +2256,7 @@ def main() -> None:
     resume_stage_idx = None
     resume_next_epoch = 0
 
-    if args.resume:
+    if arguments.resume:
 
         resume_checkpoint = (
             _load_training_checkpoint(
