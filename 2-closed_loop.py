@@ -914,8 +914,39 @@ def load_model_bundle(model_info, device):
     stage_cfg = cfg["stages_cfg"][0 if stage is None else stage]
     atmosphere_cfg = stage_cfg["atmosphere"]
     train_cfg = stage_cfg["train"]
+    runtime_cfg = cfg.get(
+        "runtime_cfg",
+        None,
+    )
 
-    precision = get_precision(train_cfg["precision"])
+    if runtime_cfg is not None:
+
+        precision_name = str(
+            runtime_cfg[
+                "precision"
+            ]
+        ).lower()
+
+    else:
+
+        # Compatibility with experiments trained
+        # before RuntimeCfg was introduced.
+        if "precision" not in train_cfg:
+            raise KeyError(
+                "The experiment contains neither "
+                "runtime_cfg['precision'] nor "
+                "legacy train_cfg['precision']."
+            )
+
+        precision_name = str(
+            train_cfg[
+                "precision"
+            ]
+        ).lower()
+
+    precision = get_precision(
+        precision_name
+    )
 
     WFS = torch.load(wfs_path, weights_only=False, map_location=device)
     WFS.crop_pos_noise = 0
@@ -931,6 +962,8 @@ def load_model_bundle(model_info, device):
         "stage_cfg": stage_cfg,
         "atmosphere_cfg": atmosphere_cfg,
         "train_cfg": train_cfg,
+        "runtime_cfg": runtime_cfg,
+        "precision_name": precision_name,
         "precision": precision,
         "WFS": WFS,
         "NN": NN,
