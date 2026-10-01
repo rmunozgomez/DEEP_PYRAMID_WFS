@@ -26,6 +26,7 @@ from .config_schema import (
     TelescopeCfg,
     TrainStageCfg,
     WfsCfg,
+    ModalBasisCfg,
 )
 
 
@@ -246,12 +247,7 @@ def _build_stages() -> List[StageCfg]:
             ),
             n_samples=int(atmosphere_values["samples"][index]),
             l0=float(atmosphere_values["l0"][index]),
-            n_modes=int(P.ATMOSPHERE_MODES),
             L0=float(atmosphere_values["L0"][index]),
-
-            dm_basis=bool(P.DM_BASIS),
-            dm_basis_type=str(P.DM_BASIS_TYPE),
-            dm_name=str(P.DM_NAME),
 
             fractional_r0=tuple(
                 float(value)
@@ -369,6 +365,30 @@ def _build_stages() -> List[StageCfg]:
         stages.append(StageCfg(atmosphere=atmosphere, train=train))
 
     return stages
+
+def _build_modal_basis_cfg() -> ModalBasisCfg:
+
+    return ModalBasisCfg(
+        use_dm_basis=bool(
+            P.MODAL_BASIS_USE_DM
+        ),
+
+        basis_type=str(
+            P.MODAL_BASIS_TYPE
+        ).upper(),
+
+        name=str(
+            P.MODAL_BASIS_NAME
+        ),
+
+        root=str(
+            P.MODAL_BASIS_ROOT
+        ),
+
+        n_modes=int(
+            P.MODAL_BASIS_N_MODES
+        ),
+    )
 
 def _build_camera_cfg() -> CameraNoiseCfg:
 
@@ -569,7 +589,7 @@ def get_config() -> ExperimentCfg:
         ),
 
         camera=_build_camera_cfg(),
-
+        modal_basis=_build_modal_basis_cfg(),
         stages=_build_stages(),
     )
 

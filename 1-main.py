@@ -1298,6 +1298,7 @@ def main() -> None:
     telescope_cfg = cfg.telescope
     wfs_cfg = cfg.wfs
     model_cfg = cfg.model
+    modal_basis_cfg = cfg.modal_basis
     stages_cfg = cfg.stages
 
     phase_rad_to_wfe_nm = (
@@ -1337,16 +1338,31 @@ def main() -> None:
     # ZERNIKE OR ACTUATOR BASIS
     # ============================================================
 
-    dm_basis = stages_cfg[0].atmosphere.dm_basis
-    dm_basis_type = stages_cfg[0].atmosphere.dm_basis_type
-    dm_name = stages_cfg[0].atmosphere.dm_name
+    dm_basis = (
+        modal_basis_cfg.use_dm_basis
+    )
+
+    dm_basis_type = (
+        modal_basis_cfg.basis_type
+    )
+
+    dm_name = (
+        modal_basis_cfg.name
+    )
 
     if dm_basis:
 
         basis_root = Path(
-            "/data2/rmunoz/DEEP_WFS/DEEP_PYRAMID_WFS/"
-            "MODAL_BASIS/DEFORMABLE_MIRROR_BASIS"
-        )
+            modal_basis_cfg.root
+        ).expanduser()
+
+        if not basis_root.is_absolute():
+            basis_root = (
+                Path(__file__).resolve().parent
+                / basis_root
+            )
+
+        basis_root = basis_root.resolve()
 
         basis_directory = (
             basis_root
@@ -1375,6 +1391,12 @@ def main() -> None:
                     f"ACTUATOR_BASIS_RES_"
                     f"{telescope_cfg.resolution}.pt"
                 )
+            )
+
+        if not dm_basis_path.is_file():
+            raise FileNotFoundError(
+                "DM basis file not found: "
+                f"{dm_basis_path}"
             )
 
         dm_data = torch.load(
@@ -1459,17 +1481,21 @@ def main() -> None:
                 .squeeze()
                 .cpu()
             ),
+
             physical_pupil=(
                 telescope_pupil
                 .squeeze()
                 .cpu()
             ),
-            diameter=telescope_cfg.diameter,
-            nModes=(
-                stages_cfg[0]
-                .atmosphere
-                .n_modes
+
+            diameter=(
+                telescope_cfg.diameter
             ),
+
+            nModes=(
+                modal_basis_cfg.n_modes
+            ),
+
             type="torch",
         )
 
@@ -1483,8 +1509,6 @@ def main() -> None:
     )
 
     n_output_modes = int(zDecomposeMat.shape[0])
-    for stage in stages_cfg:
-        stage.atmosphere.n_modes = n_output_modes
 
     # ============================================================
     # WFS
@@ -1606,6 +1630,9 @@ def main() -> None:
             "wfs_cfg": asdict(cfg.wfs),
             "model_cfg": asdict(cfg.model),
             "camera_cfg": asdict(cfg.camera),
+            "modal_basis_cfg": asdict(
+                cfg.modal_basis
+            ),
             "stages_cfg": [
                 asdict(stage) for stage in cfg.stages
             ],

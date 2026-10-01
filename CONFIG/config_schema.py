@@ -30,7 +30,10 @@ FrozenFlowMode = Literal["analytic", "periodic_screen"]
 AsmExtraPixels = Union[int, Literal["auto"], None]
 R0SamplingMode = Literal["uniform_r0","uniform_dr0"]
 LayerSamplingMode = Literal["altitude_stratified", "legacy_stratified",]
-
+ModalBasisType = Literal[
+    "ACTUATOR",
+    "ZERNIKE",
+]
 
 @dataclass(frozen=True)
 class SourceCfg:
@@ -143,22 +146,69 @@ class ModelCfg:
     weights: Optional[str] = None
     resolution: int = 128
 
+@dataclass(frozen=True)
+class ModalBasisCfg:
+    """
+    Global modal/control basis configuration.
 
-@dataclass(frozen=False)
+    use_dm_basis=False
+        Generate an ideal Zernike basis.
+
+    use_dm_basis=True
+        Load a basis associated with a deformable mirror.
+    """
+
+    use_dm_basis: bool = False
+
+    basis_type: ModalBasisType = "ACTUATOR"
+
+    name: str = ""
+
+    root: str = (
+        "MODAL_BASIS/"
+        "DEFORMABLE_MIRROR_BASIS"
+    )
+
+    n_modes: int = 68
+
+    def __post_init__(self) -> None:
+
+        if self.basis_type not in (
+            "ACTUATOR",
+            "ZERNIKE",
+        ):
+            raise ValueError(
+                "basis_type must be "
+                "'ACTUATOR' or 'ZERNIKE'."
+            )
+
+        if self.n_modes <= 0:
+            raise ValueError(
+                "n_modes must be positive."
+            )
+
+        if self.use_dm_basis:
+
+            if not self.name.strip():
+                raise ValueError(
+                    "A DM basis requires a non-empty name."
+                )
+
+            if not self.root.strip():
+                raise ValueError(
+                    "A DM basis requires a non-empty root."
+                )
+
+@dataclass(frozen=True)
 class AtmosphereStageCfg:
     dr0_range: Tuple[float, float] = (10.0, 100.0)
     n_samples: int = 10_000
 
     l0: float = 1e-10
-    n_modes: int = 68
     L0: float = 25.0
     
     r0_sampling: R0SamplingMode = "uniform_dr0"
     layer_sampling: LayerSamplingMode = "altitude_stratified"
-
-    dm_basis: bool = False
-    dm_basis_type: str = "ACTUATOR"
-    dm_name: str = "./"
 
     fractional_r0: Tuple[float, ...] = (1.0,)
     wind_speed_range: Tuple[float, float] = (0.0, 15.0)
@@ -485,8 +535,24 @@ class CameraNoiseCfg:
 @dataclass(frozen=True)
 class ExperimentCfg:
     camera: CameraNoiseCfg
-    source: SourceCfg = field(default_factory=SourceCfg)
-    telescope: TelescopeCfg = field(default_factory=TelescopeCfg)
-    wfs: WfsCfg = field(default_factory=WfsCfg)
-    model: ModelCfg = field(default_factory=ModelCfg)
-    stages: List[StageCfg] = field(default_factory=list)
+    modal_basis: ModalBasisCfg
+
+    source: SourceCfg = field(
+        default_factory=SourceCfg
+    )
+
+    telescope: TelescopeCfg = field(
+        default_factory=TelescopeCfg
+    )
+
+    wfs: WfsCfg = field(
+        default_factory=WfsCfg
+    )
+
+    model: ModelCfg = field(
+        default_factory=ModelCfg
+    )
+
+    stages: List[StageCfg] = field(
+        default_factory=list
+    )

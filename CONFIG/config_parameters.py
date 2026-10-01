@@ -146,10 +146,33 @@ ATMOSPHERE_ASM_PADDING_FACTOR = [2.0]
 ATMOSPHERE_DELTA_WRAP_WARNING_THRESHOLD = [5.969026041820607]  # 1.9*pi
 ATMOSPHERE_TEMPORAL_REANCHOR_INTERVAL = [0]
 
-ATMOSPHERE_MODES = 97
-DM_BASIS = True
-DM_BASIS_TYPE = "ACTUATOR"  # "ACTUATOR" | "ZERNIKE"
-DM_NAME = "BAX370_MRS"
+# ============================================================
+# MODAL BASIS / DEFORMABLE MIRROR
+# ============================================================
+
+# False:
+#     use an ideal Zernike basis generated numerically.
+#
+# True:
+#     load a basis associated with a real deformable mirror.
+MODAL_BASIS_USE_DM = True
+
+# Basis representation stored for the DM.
+# "ACTUATOR" | "ZERNIKE"
+MODAL_BASIS_TYPE = "ACTUATOR"
+
+# DM / basis directory name.
+MODAL_BASIS_NAME = "BAX370_MRS"
+
+# Path can be relative to the repository or absolute.
+MODAL_BASIS_ROOT = (
+    "MODAL_BASIS/DEFORMABLE_MIRROR_BASIS"
+)
+
+# Number of modes used when MODAL_BASIS_USE_DM=False.
+# When a real DM basis is loaded, the number of outputs is
+# derived directly from zDecomposeMat.
+MODAL_BASIS_N_MODES = 97
 
 # ============================================================
 # CAMERA
