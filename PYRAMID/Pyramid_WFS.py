@@ -197,6 +197,46 @@ class Pyramid:
             device=self.device,
             return_crop_sizes=True,
         )
+        # ============================================================
+        # Precomputed crop geometry
+        # ============================================================
+
+        crop_sizes_tensor = torch.as_tensor(
+            self.crop_sizes,
+            dtype=torch.int64,
+            device="cpu",
+        ).reshape(-1)
+
+        n_crop_centers = len(
+            self.coords
+        )
+
+        if crop_sizes_tensor.numel() != n_crop_centers:
+            raise ValueError(
+                "crop_sizes and coords must have "
+                "the same number of pupils."
+            )
+
+        base_crop_size = int(
+            crop_sizes_tensor.max().item()
+        )
+
+        # Keep crop size even, matching the previous implementation.
+        if base_crop_size % 2 != 0:
+            base_crop_size += 1
+
+        self._base_crop_size = base_crop_size
+
+        minimum_crop_size = (
+            self._base_crop_size
+            - 2 * int(self.crop_size_noise)
+        )
+
+        if minimum_crop_size <= 0:
+            raise ValueError(
+                "crop_size_noise produces a non-positive crop size: "
+                f"{minimum_crop_size}"
+            )
         self.piston_wfs = self.propagate(
             pupil=self.telescope_pupil,
             phi=torch.zeros_like(
@@ -348,217 +388,392 @@ class Pyramid:
         intensity: torch.Tensor,
         return_boxes: bool = False,
     ):
+        """
+        Vectorized pyramid-pupil extraction.
 
-        B, C, H, W = intensity.shape
-        N = self.coords.shape[0]
+        Parameters
+        ----------
+        intensity:
+            Full WFS intensity with shape [B, 1, H, W].
 
-        crop_sizes = np.asarray(
-            self.crop_sizes,
-            dtype=np.int64,
-        ).reshape(-1)
+        return_boxes:
+            If True, also return the exact integer bounding boxes
+            used to define each crop.
 
-        if crop_sizes.shape[0] != N:
+        Returns
+        -------
+        crops:
+            Tensor [B, N, output_resolution, output_resolution].
+
+        boxes:
+            Optional NumPy array [B, N, 4] with
+            (x0, y0, x1, y1).
+
+        Notes
+        -----
+        Crop-size jitter is sampled once per batch element and is
+        shared between all pupils of that realization.
+
+        Position jitter is sampled independently for every pupil.
+
+        The previous:
+            integer crop -> F.interpolate(..., bilinear)
+
+        operation is reproduced with a single batched grid_sample.
+        """
+
+        if intensity.ndim != 4:
             raise ValueError(
-                "self.crop_sizes debe tener el mismo largo que self.coords"
+                "intensity must have shape [B,C,H,W]. "
+                f"Received {tuple(intensity.shape)}."
             )
 
-        base_size = int(
-            np.max(crop_sizes)
+        B, C, H, W = intensity.shape
+
+        if C != 1:
+            raise ValueError(
+                "Pyramid crop currently expects one full-frame "
+                f"intensity channel. Received C={C}."
+            )
+
+        device = intensity.device
+        dtype = intensity.dtype
+
+        M = int(
+            self.output_resolution
         )
 
-        if base_size % 2 != 0:
-            base_size += 1
+        if M <= 0:
+            raise ValueError(
+                "output_resolution must be positive."
+            )
 
-        crops = torch.empty(
-            (
+        # ============================================================
+        # Base pupil centers
+        # ============================================================
+
+        centers_base = torch.as_tensor(
+            self.coords,
+            device=device,
+        )
+
+        if (
+            centers_base.ndim != 2
+            or centers_base.shape[-1] != 2
+        ):
+            raise ValueError(
+                "self.coords must have shape [N,2]. "
+                f"Received {tuple(centers_base.shape)}."
+            )
+
+        # Previous implementation used int(self.coords[n, ...]).
+        # int64 conversion preserves that integer-center behaviour.
+        centers_base = centers_base.to(
+            dtype=torch.int64
+        )
+
+        N = int(
+            centers_base.shape[0]
+        )
+
+        # ============================================================
+        # Crop-size jitter
+        # One size per realization, shared by all its pupils.
+        # ============================================================
+
+        crop_size_noise = int(
+            self.crop_size_noise
+        )
+
+        if crop_size_noise > 0:
+
+            size_step = torch.randint(
+                low=-crop_size_noise,
+                high=crop_size_noise + 1,
+                size=(B,),
+                device=device,
+                dtype=torch.int64,
+            )
+
+        else:
+
+            size_step = torch.zeros(
                 B,
-                N,
-                self.output_resolution,
-                self.output_resolution,
-            ),
-            device=intensity.device,
-            dtype=intensity.dtype,
+                device=device,
+                dtype=torch.int64,
+            )
+
+        size_n = (
+            int(self._base_crop_size)
+            + 2 * size_step
         )
 
-        if return_boxes:
-            boxes = np.zeros(
+        half_n = (
+            size_n // 2
+        )
+
+        # ============================================================
+        # Position jitter
+        # Independent dx/dy for every pupil.
+        # ============================================================
+
+        crop_pos_noise = int(
+            self.crop_pos_noise
+        )
+
+        if crop_pos_noise > 0:
+
+            jitter = torch.randint(
+                low=-crop_pos_noise,
+                high=crop_pos_noise + 1,
+                size=(
+                    B,
+                    N,
+                    2,
+                ),
+                device=device,
+                dtype=torch.int64,
+            )
+
+        else:
+
+            jitter = torch.zeros(
                 (
                     B,
                     N,
-                    4,
+                    2,
                 ),
-                dtype=np.int64,
+                device=device,
+                dtype=torch.int64,
             )
-        else:
-            boxes = None
 
-        max_crop_size = (
-            base_size
-            + 2 * int(self.crop_size_noise)
+        centers = (
+            centers_base.unsqueeze(0)
+            + jitter
         )
 
-        max_half = max_crop_size // 2
+        x = centers[..., 0]
+        y = centers[..., 1]
 
-        pad = (
-            max_half
-            + int(self.crop_pos_noise)
-            + 1
+        # ============================================================
+        # Integer crop boxes
+        # ============================================================
+
+        half = half_n[:, None]
+
+        x0 = x - half
+        x1 = x + half
+
+        y0 = y - half
+        y1 = y + half
+
+        # ============================================================
+        # Sampling coordinates
+        # ============================================================
+        #
+        # Previous implementation:
+        #
+        #   crop = image[y0:y1, x0:x1]
+        #   resize(crop, M, align_corners=False)
+        #
+        # For align_corners=False the source coordinate for output
+        # pixel j is:
+        #
+        #   src = x0 + (j + 0.5) * size / M - 0.5
+        #
+        # Clamping to [x0, x1-1] reproduces interpolate's border
+        # behaviour inside the extracted crop.
+        # ============================================================
+
+        output_coordinate = (
+            torch.arange(
+                M,
+                device=device,
+                dtype=dtype,
+            )
+            + 0.5
         )
 
-        intensity_pad = F.pad(
-            intensity,
+        size_float = (
+            size_n
+            .to(dtype=dtype)
+            .view(B, 1, 1)
+        )
+
+        x0_float = (
+            x0
+            .to(dtype=dtype)
+            .unsqueeze(-1)
+        )
+
+        y0_float = (
+            y0
+            .to(dtype=dtype)
+            .unsqueeze(-1)
+        )
+
+        x_last_float = (
+            (x1 - 1)
+            .to(dtype=dtype)
+            .unsqueeze(-1)
+        )
+
+        y_last_float = (
+            (y1 - 1)
+            .to(dtype=dtype)
+            .unsqueeze(-1)
+        )
+
+        source_x = (
+            x0_float
+            + output_coordinate.view(1, 1, M)
+            * size_float
+            / float(M)
+            - 0.5
+        )
+
+        source_y = (
+            y0_float
+            + output_coordinate.view(1, 1, M)
+            * size_float
+            / float(M)
+            - 0.5
+        )
+
+        # Reproduce F.interpolate border behaviour on each
+        # individually extracted crop.
+        source_x = torch.maximum(
+            source_x,
+            x0_float,
+        )
+
+        source_x = torch.minimum(
+            source_x,
+            x_last_float,
+        )
+
+        source_y = torch.maximum(
+            source_y,
+            y0_float,
+        )
+
+        source_y = torch.minimum(
+            source_y,
+            y_last_float,
+        )
+
+        # ============================================================
+        # Pixel coordinates -> grid_sample normalized coordinates
+        # align_corners=False
+        # ============================================================
+
+        grid_x = (
+            2.0
+            * (source_x + 0.5)
+            / float(W)
+            - 1.0
+        )
+
+        grid_y = (
+            2.0
+            * (source_y + 0.5)
+            / float(H)
+            - 1.0
+        )
+
+        # source_x describes output columns.
+        # source_y describes output rows.
+        grid_x = (
+            grid_x
+            .unsqueeze(-2)
+            .expand(
+                B,
+                N,
+                M,
+                M,
+            )
+        )
+
+        grid_y = (
+            grid_y
+            .unsqueeze(-1)
+            .expand(
+                B,
+                N,
+                M,
+                M,
+            )
+        )
+
+        grid = torch.stack(
             (
-                pad,
-                pad,
-                pad,
-                pad,
+                grid_x,
+                grid_y,
             ),
-            mode="constant",
-            value=0.0,
+            dim=-1,
         )
 
-        for b in range(B):
+        # Instead of repeating the input N times, concatenate the
+        # N pupil grids along the output-height dimension.
+        grid = grid.reshape(
+            B,
+            N * M,
+            M,
+            2,
+        )
 
-            # ========================================================
-            # Crop size jitter
-            # Uno distinto por imagen del batch,
-            # pero compartido entre todas sus pupilas.
-            # ========================================================
+        # ============================================================
+        # ONE vectorized interpolation operation
+        # ============================================================
 
-            if self.crop_size_noise > 0:
+        sampled = F.grid_sample(
+            intensity,
+            grid,
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=False,
+        )
 
-                size_step = int(
-                    torch.randint(
-                        low=-self.crop_size_noise,
-                        high=self.crop_size_noise + 1,
-                        size=(1,),
-                        device=intensity.device,
-                    ).item()
-                )
-
-            else:
-
-                size_step = 0
-
-            size_n = (
-                base_size
-                + 2 * size_step
+        # sampled:
+        # [B, 1, N*M, M]
+        #
+        # -> [B, N, M, M]
+        crops = (
+            sampled
+            .reshape(
+                B,
+                C,
+                N,
+                M,
+                M,
             )
+            [:, 0]
+            .contiguous()
+        )
 
-            if size_n <= 0:
-                raise ValueError(
-                    f"Crop size inválido: {size_n}"
-                )
-
-            half_n = size_n // 2
-
-            # ========================================================
-            # Pupilas
-            # ========================================================
-
-            for n in range(N):
-                # ====================================================
-                # Position jitter
-                # ====================================================
-
-                if self.crop_pos_noise > 0:
-
-                    dx = int(
-                        torch.randint(
-                            low=-self.crop_pos_noise,
-                            high=self.crop_pos_noise + 1,
-                            size=(1,),
-                            device=intensity.device,
-                        ).item()
-                    )
-
-                    dy = int(
-                        torch.randint(
-                            low=-self.crop_pos_noise,
-                            high=self.crop_pos_noise + 1,
-                            size=(1,),
-                            device=intensity.device,
-                        ).item()
-                    )
-
-                else:
-
-                    dx = 0
-                    dy = 0
-
-                # ====================================================
-                # Centro
-                # ====================================================
-
-                x = int(
-                    self.coords[n, 0]
-                ) + dx
-
-                y = int(
-                    self.coords[n, 1]
-                ) + dy
-
-                # ====================================================
-                # Bounding box
-                # ====================================================
-
-                x0 = x - half_n
-                x1 = x + half_n
-
-                y0 = y - half_n
-                y1 = y + half_n
-
-                if return_boxes:
-                    boxes[
-                        b,
-                        n,
-                        :,
-                    ] = (
-                        x0,
-                        y0,
-                        x1,
-                        y1,
-                    )
-
-                # ====================================================
-                # Crop
-                # ====================================================
-
-                xp = x + pad
-                yp = y + pad
-
-                crop = intensity_pad[
-                    b:b + 1,
-                    :,
-                    yp - half_n:yp + half_n,
-                    xp - half_n:xp + half_n,
-                ]
-
-                # ====================================================
-                # Resize individual a NN resolution
-                # ====================================================
-
-                crop_resized = F.interpolate(
-                    crop,
-                    size=(
-                        self.output_resolution,
-                        self.output_resolution,
-                    ),
-                    mode="bilinear",
-                    align_corners=False,
-                )
-
-                crops[
-                    b,
-                    n,
-                    :,
-                    :,
-                ] = crop_resized[
-                    0,
-                    0,
-                ]
+        # ============================================================
+        # Optional debug boxes
+        # ============================================================
 
         if return_boxes:
+
+            boxes = torch.stack(
+                (
+                    x0,
+                    y0,
+                    x1,
+                    y1,
+                ),
+                dim=-1,
+            )
+
+            boxes = (
+                boxes
+                .detach()
+                .cpu()
+                .numpy()
+            )
+
             return crops, boxes
 
         return crops
