@@ -1548,11 +1548,6 @@ def build_model_basis_bundle(
         telescope_cfg["diameter"]
     )
 
-    n_modes = _get_model_n_modes(
-        model_info,
-        bundle,
-    )
-
     # =========================================================
     # Pupila física EXACTA usada durante el entrenamiento
     # =========================================================
@@ -1652,6 +1647,81 @@ def build_model_basis_bundle(
             "zDecomposeMat"
         ]
 
+        # ============================================================
+        # DM BASIS DIMENSIONS
+        #
+        # The basis file is the authority for the number of controlled
+        # degrees of freedom. Do not truncate or reshape the matrices.
+        # ============================================================
+
+        if zDecomposeMat.ndim != 2:
+            raise ValueError(
+                "DM zDecomposeMat must be 2-D. "
+                f"Received shape {tuple(zDecomposeMat.shape)}."
+            )
+
+        expected_pixels = (
+            resolution
+            * resolution
+        )
+
+        if int(
+            zDecomposeMat.shape[1]
+        ) != expected_pixels:
+
+            raise ValueError(
+                "DM zDecomposeMat must have shape "
+                f"[n_modes, {expected_pixels}]. "
+                f"Received {tuple(zDecomposeMat.shape)}."
+            )
+
+        n_modes = int(
+            zDecomposeMat.shape[0]
+        )
+
+        if n_modes <= 0:
+            raise ValueError(
+                "DM basis contains no controlled modes."
+            )
+
+        # zernike_compose_torch expects:
+        # [H, W, n_modes]
+        expected_compose_shape = (
+            resolution,
+            resolution,
+            n_modes,
+        )
+
+        if tuple(
+            zComposeMat.shape
+        ) != expected_compose_shape:
+
+            raise ValueError(
+                "DM zComposeMat must have shape "
+                f"{expected_compose_shape}. "
+                f"Received {tuple(zComposeMat.shape)}."
+            )
+
+        configured_n_modes = (
+            None
+            if modal_basis_cfg is None
+            else modal_basis_cfg.get(
+                "n_modes",
+                None,
+            )
+        )
+
+        if (
+            configured_n_modes is not None
+            and int(configured_n_modes) != n_modes
+        ):
+            print(
+                "[WARNING] modal_basis_cfg['n_modes']="
+                f"{configured_n_modes}, but the loaded DM basis "
+                f"contains {n_modes} modes. "
+                "The DM basis file takes precedence."
+            )
+
         # Pupila ORIGINAL almacenada con la base DM.
         # Solo se usa para comprobar compatibilidad.
         dm_pupil = _as_4d_pupil(
@@ -1706,6 +1776,8 @@ def build_model_basis_bundle(
                 "telescope_pupil_shape": tuple(trained_telescope_pupil.shape),
             },
         )
+
+    
 
     # ============================================================
     # STANDARD ZERNIKE BASIS
