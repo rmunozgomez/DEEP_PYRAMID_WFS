@@ -2314,7 +2314,10 @@ def main() -> None:
                 processed_samples += batch_weight
                 
                 dr0_batch = (
-                    telescope_cfg.diameter / atmosphere.r0_batch
+                    telescope_cfg.diameter
+                    / atmosphere.r0_batch[
+                        :current_batch_size
+                    ]
                 )
                 std0 = (
                     running_open_std
@@ -2781,8 +2784,10 @@ def main() -> None:
                     "dataset_saved: False",
                     "generation_mode: online",
                     f"total_configured_samples_per_epoch: {atmosphere_cfg.n_samples}",
-                    f"actual_train_samples_per_epoch: {actual_train_samples}",
-                    f"actual_val_samples_per_epoch: {actual_val_samples}",
+                    f"actual_train_samples_per_epoch: {train_samples}",
+                    f"actual_val_samples_per_epoch: {val_samples}",
+                    f"train_batch_sizes: {train_batch_sizes}",
+                    f"val_batch_sizes: {val_batch_sizes}",
                     f"train_batches_per_epoch: {train_batches}",
                     f"val_batches_per_epoch: {val_batches}",
                     f"batch_size: {train_cfg.batch_size}",
