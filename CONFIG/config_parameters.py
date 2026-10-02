@@ -61,7 +61,7 @@ WFS_OFFSET = 10
 # ============================================================
 # NEURAL NETWORK
 # ============================================================
-MODEL = "ConvNeXtTiny" # "ConvNeXtTiny", "GcVit", "TinyResNetWFS"
+MODEL = "TinyResNetWFS" # "ConvNeXtTiny", "GcVit", "TinyResNetWFS"
 WTS = None
 NN_RESOLUTION = 36
 
@@ -70,7 +70,7 @@ NN_RESOLUTION = 36
 # ATMOSPHERE — PER STAGE
 # ============================================================
 # Total online samples generated per epoch: train + validation.
-ATMOSPHERE_SAMPLES = [25000]
+ATMOSPHERE_SAMPLES = [100000]
 
 # D/r0 is sampled uniformly inside this interval, then r0 = D / (D/r0).
 ATMOSPHERE_DR0_RANGE = [[5.0, 40.0]]
@@ -358,7 +358,7 @@ LOSS_EPS = [1e-8]
 TRAIN_FRAC = [0.8]
 BATCH_SIZE = [20]
 EPOCHS = [200]
-LR = [1e-4]
+LR = [7.5e-4]
 WEIGHT_DECAY = [0.0]
 LR_GAMMA = [0.999]
 
